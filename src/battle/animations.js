@@ -17,13 +17,20 @@ const BattleAnimations = (() => {
    * @param {'enemy'|'player'} side
    */
   async function attackLunge(spriteEl, side) {
-    const dir = side === 'player' ? 1 : -1; // player lunges right, enemy lunges left
-    spriteEl.animate([
+    // Pause the idle so it doesn't fight the lunge animation
+    pauseIdle(side);
+
+    const dir = side === 'player' ? 1 : -1;
+    const anim = spriteEl.animate([
       { transform: 'translate(0, 0)' },
       { transform: `translate(${dir * 28}px, -8px)` },
       { transform: 'translate(0, 0)' }
-    ], { duration: 300, easing: 'ease-in-out' });
+    ], { duration: 300, easing: 'ease-in-out', fill: 'none' });
     await wait(300);
+    anim.cancel();
+
+    // Resume idle bobbing
+    resumeIdle(side);
   }
 
   // ─── Defender flash (hit confirmation) ────────
@@ -120,28 +127,54 @@ const BattleAnimations = (() => {
    * @param {HTMLElement} spriteEl
    */
   async function faintAnimation(spriteEl) {
-    spriteEl.animate([
-      { transform: 'translateY(0)',   opacity: 1 },
+    // Cancel any existing animations first to avoid conflicts
+    spriteEl.getAnimations().forEach(a => a.cancel());
+
+    // Apply the faint visually via inline style so it persists without fill:'forwards'
+    const anim = spriteEl.animate([
+      { transform: 'translateY(0)',    opacity: 1 },
       { transform: 'translateY(60px)', opacity: 0 }
-    ], { duration: 500, easing: 'ease-in', fill: 'forwards' });
+    ], { duration: 500, easing: 'ease-in', fill: 'none' });
+
     await wait(500);
+
+    // Cancel the Web Animation and lock the final state via inline style
+    anim.cancel();
+    spriteEl.style.opacity   = '0';
+    spriteEl.style.transform = 'translateY(60px)';
   }
 
   // ─── Pokémon enter animation ──────────────────
   /**
    * New Pokémon slides in from the side.
+   * Fully resets inline styles before animating so previous faint state is cleared.
    * @param {HTMLElement} spriteEl
    * @param {'player'|'enemy'} side
    */
   async function enterAnimation(spriteEl, side) {
-    spriteEl.style.opacity = '1'; // reset from faint
+    // Cancel ALL previous animations on this element (fixes the fill:'forwards' ghost)
+    spriteEl.getAnimations().forEach(a => a.cancel());
+
+    // Hard-reset inline styles so the faint state is wiped
+    spriteEl.style.opacity   = '1';
     spriteEl.style.transform = '';
+    spriteEl.style.filter    = '';
+
+    // Force a reflow so the browser registers the reset before animating
+    void spriteEl.offsetWidth;
+
     const dir = side === 'player' ? -1 : 1;
-    spriteEl.animate([
+    const anim = spriteEl.animate([
       { transform: `translateX(${dir * 80}px)`, opacity: 0 },
       { transform: 'translateX(0)',              opacity: 1 }
-    ], { duration: 350, easing: 'cubic-bezier(0.22,1,0.36,1)', fill: 'forwards' });
+    ], { duration: 350, easing: 'cubic-bezier(0.22,1,0.36,1)', fill: 'none' });
+
     await wait(350);
+    anim.cancel();
+
+    // Lock final state via inline style
+    spriteEl.style.opacity   = '1';
+    spriteEl.style.transform = 'translateX(0)';
   }
 
   // ─── Status effect flash ──────────────────────
@@ -226,7 +259,100 @@ const BattleAnimations = (() => {
     }
   }
 
-  // ─── Public API ───────────────────────────────
+  // ─── Idle Animations ──────────────────────────
+  // Each sprite gets a looping "breathing" idle animation.
+  // Enemy Pokémon bob gently. Player Pokémon sway slightly.
+  // We track running idles so we can cancel them during attacks.
+
+  const _idleAnimations = { player: null, enemy: null };
+
+  /**
+   * Start the idle (breathing/bobbing) loop for a sprite.
+   * Different styles for player vs enemy to feel distinct.
+   * @param {HTMLElement} spriteEl
+   * @param {'player'|'enemy'} side
+   */
+  function startIdle(spriteEl, side) {
+    // Cancel any existing idle on this side first
+    stopIdle(side);
+
+    if (!spriteEl || spriteEl.style.opacity === '0') return;
+
+    let keyframes, options;
+
+    if (side === 'enemy') {
+      // Enemy: gentle bob up and down + very slight scale breathe
+      keyframes = [
+        { transform: 'translateY(0px) scale(1)',      offset: 0   },
+        { transform: 'translateY(-6px) scale(1.025)', offset: 0.4 },
+        { transform: 'translateY(-8px) scale(1.03)',  offset: 0.5 },
+        { transform: 'translateY(-6px) scale(1.025)', offset: 0.6 },
+        { transform: 'translateY(0px) scale(1)',      offset: 1   },
+      ];
+      options = {
+        duration: 2200,
+        iterations: Infinity,
+        easing: 'ease-in-out'
+      };
+    } else {
+      // Player: subtle rock side to side + breathe (more grounded, back sprite)
+      keyframes = [
+        { transform: 'translateY(0px) rotate(0deg)',   offset: 0    },
+        { transform: 'translateY(-3px) rotate(-1deg)', offset: 0.25 },
+        { transform: 'translateY(-5px) rotate(0deg)',  offset: 0.5  },
+        { transform: 'translateY(-3px) rotate(1deg)',  offset: 0.75 },
+        { transform: 'translateY(0px) rotate(0deg)',   offset: 1    },
+      ];
+      options = {
+        duration: 2800,
+        iterations: Infinity,
+        easing: 'ease-in-out'
+      };
+    }
+
+    const anim = spriteEl.animate(keyframes, options);
+    _idleAnimations[side] = { anim, el: spriteEl };
+  }
+
+  /**
+   * Pause the idle animation on a side (e.g. during an attack lunge).
+   * @param {'player'|'enemy'} side
+   */
+  function pauseIdle(side) {
+    const idle = _idleAnimations[side];
+    if (idle?.anim) idle.anim.pause();
+  }
+
+  /**
+   * Resume the idle after an attack finishes.
+   * @param {'player'|'enemy'} side
+   */
+  function resumeIdle(side) {
+    const idle = _idleAnimations[side];
+    if (idle?.anim) idle.anim.play();
+  }
+
+  /**
+   * Stop and cancel the idle on a side (on faint or switch).
+   * @param {'player'|'enemy'} side
+   */
+  function stopIdle(side) {
+    const idle = _idleAnimations[side];
+    if (idle?.anim) {
+      idle.anim.cancel();
+      _idleAnimations[side] = null;
+    }
+  }
+
+  /**
+   * Stop all idles (e.g. on battle end).
+   */
+  function stopAllIdles() {
+    stopIdle('player');
+    stopIdle('enemy');
+  }
+
+
   return {
     wait,
     attackLunge,
@@ -237,7 +363,12 @@ const BattleAnimations = (() => {
     enterAnimation,
     statusFlash,
     screenShake,
-    playAttackSequence
+    playAttackSequence,
+    startIdle,
+    pauseIdle,
+    resumeIdle,
+    stopIdle,
+    stopAllIdles
   };
 
 })();

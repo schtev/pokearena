@@ -167,6 +167,7 @@ const Tower = (() => {
   function startRun() {
     currentFloor = 1;
     isActive     = true;
+    SaveSystem.setTowerRun(1);
     updateHUD();
   }
 
@@ -174,15 +175,28 @@ const Tower = (() => {
     currentFloor++;
     if (currentFloor > bestFloor) {
       bestFloor = currentFloor;
-      localStorage.setItem('pokearena_best_floor', bestFloor);
-      document.getElementById('best-floor').textContent = bestFloor;
+      SaveSystem.setBestFloor(bestFloor);
     }
+    SaveSystem.setTowerRun(currentFloor);
     updateHUD();
   }
 
   function endRun() {
     isActive = false;
+    SaveSystem.setTowerRun(0);
     updateBestFloorDisplay();
+  }
+
+  /** Resume a run that was interrupted (e.g. page refresh mid-tower) */
+  function resumeRun() {
+    const saved = SaveSystem.get().towerRun || 0;
+    if (saved > 1) {
+      currentFloor = saved;
+      isActive     = true;
+      updateHUD();
+      return true;   // caller knows there's a run to resume
+    }
+    return false;
   }
 
   function getCurrentFloor() { return currentFloor; }
@@ -196,14 +210,24 @@ const Tower = (() => {
   }
 
   function updateBestFloorDisplay() {
-    const saved = parseInt(localStorage.getItem('pokearena_best_floor')) || 0;
-    bestFloor = Math.max(bestFloor, saved);
+    bestFloor = SaveSystem.getBestFloor() || 0;
     const el = document.getElementById('best-floor');
     if (el) el.textContent = bestFloor > 0 ? `Floor ${bestFloor}` : '—';
   }
 
   function init() {
     updateBestFloorDisplay();
+    // Check for an interrupted run
+    const savedFloor = SaveSystem.get().towerRun || 0;
+    if (savedFloor > 1) {
+      currentFloor = savedFloor;
+      // Show "resume" button on tower menu
+      const resumeBtn = document.getElementById('tower-resume-btn');
+      if (resumeBtn) resumeBtn.classList.remove('hidden');
+      const resumeLabel = document.getElementById('tower-resume-floor');
+      if (resumeLabel) resumeLabel.textContent = `Resume Floor ${savedFloor}`;
+      updateHUD();
+    }
   }
 
   // ─── Public API ───────────────────────────────
@@ -212,6 +236,7 @@ const Tower = (() => {
     startRun,
     advanceFloor,
     endRun,
+    resumeRun,
     generateFloor,
     getCurrentFloor,
     getIsActive

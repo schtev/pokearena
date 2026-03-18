@@ -35,15 +35,13 @@ const BattleEngine = (() => {
    * @param {object} move     - Move object from MOVES_DATA
    * @returns {object} { damage, effectiveness, isCrit, effectivenessText }
    */
-  function calculateDamage(attacker, defender, move) {
+  function calculateDamage(attacker, defender, move, extraMults = {}) {
     if (move.power === 0) {
-      // Status move — no damage
       return { damage: 0, effectiveness: 1, isCrit: false, effectivenessText: '' };
     }
 
     const level = attacker.level;
 
-    // Pick correct offensive/defensive stats based on move category
     let atkStat, defStat;
     if (move.category === 'physical') {
       atkStat = applyStage(attacker.stats.attack,  attacker.stages.attack);
@@ -53,37 +51,29 @@ const BattleEngine = (() => {
       defStat = applyStage(defender.stats.spdef, defender.stages.spdef);
     }
 
-    // Core formula
     let base = Math.floor(
       (((2 * level / 5 + 2) * move.power * atkStat / defStat) / 50) + 2
     );
 
-    // STAB (Same-Type Attack Bonus) = 1.5×
-    const stab = attacker.types.includes(move.type) ? 1.5 : 1;
-
-    // Type effectiveness
+    const stab          = attacker.types.includes(move.type) ? 1.5 : 1;
     const effectiveness = getTypeEffectiveness(move.type, defender.types);
+    const isCrit        = Math.random() < 0.0625;
+    const critMult      = isCrit ? 1.5 : 1;
+    const random        = 0.85 + Math.random() * 0.15;
+    const burnMult      = (attacker.status === 'burned' && move.category === 'physical') ? 0.5 : 1;
 
-    // Critical hit — 1/16 base chance (simplified)
-    const isCrit = Math.random() < 0.0625;
-    const critMult = isCrit ? 1.5 : 1;
-
-    // Random roll: 85–100%
-    const random = 0.85 + Math.random() * 0.15;
-
-    // Burn halves physical damage
-    const burnMult = (attacker.status === 'burned' && move.category === 'physical') ? 0.5 : 1;
+    // External multipliers from weather, abilities, held items
+    const weatherMult  = extraMults.weather  ?? 1;
+    const abilityMult  = extraMults.ability  ?? 1;
+    const heldMult     = extraMults.held     ?? 1;
+    const defAbilMult  = extraMults.defAbil  ?? 1;
 
     const damage = Math.max(1,
-      Math.floor(base * stab * effectiveness * critMult * random * burnMult)
+      Math.floor(base * stab * effectiveness * critMult * random * burnMult
+        * weatherMult * abilityMult * heldMult * defAbilMult)
     );
 
-    return {
-      damage,
-      effectiveness,
-      effectivenessText: getEffectivenessText(effectiveness),
-      isCrit
-    };
+    return { damage, effectiveness, effectivenessText: getEffectivenessText(effectiveness), isCrit };
   }
 
   // ─── Accuracy Check ────────────────────────────
@@ -322,7 +312,7 @@ const BattleEngine = (() => {
    */
   function executeTurn(playerPkmn, enemyPkmn, playerMove, enemyMove) {
     const events = [];
-    const order = getTurnOrder(playerMove, enemyMove, playerPkmn, enemyPkmn);
+    const order  = getTurnOrder(playerMove, enemyMove, playerPkmn, enemyPkmn);
 
     const sides = [
       { pkmn: playerPkmn, move: playerMove, label: 'player' },
@@ -333,20 +323,29 @@ const BattleEngine = (() => {
       const { pkmn: attacker, move, label } = sides[idx];
       const { pkmn: defender }              = sides[1 - idx];
 
-      if (hasFainted(attacker)) continue; // already out
+      if (hasFainted(attacker)) continue;
 
-      // Reduce PP
       move.currentPP = Math.max(0, (move.currentPP ?? move.pp) - 1);
 
-      // Accuracy check
       if (!accuracyCheck(move, attacker, defender)) {
         events.push({ type: 'miss', user: label, move });
         continue;
       }
 
-      // Calculate damage
+      // ── Gather multipliers from optional systems ──
+      const weatherMult = (typeof Weather        !== 'undefined') ? Weather.getMoveMult(move.type)                        : 1;
+      const abilityMult = (typeof AbilitySystem  !== 'undefined') ? AbilitySystem.triggerAttack(attacker, move, Weather)  : 1;
+      const heldMult    = (typeof HeldItems      !== 'undefined') ? HeldItems.triggerAttack(attacker, move)               : 1;
+      const defAbilMult = (typeof AbilitySystem  !== 'undefined') ? AbilitySystem.triggerDefend(defender, move, getTypeEffectiveness(move.type, defender.types)) : 1;
+      const defHeldMult = (typeof HeldItems      !== 'undefined') ? HeldItems.triggerDefend(defender, move)               : 1;
+
       const { damage, effectiveness, effectivenessText, isCrit } =
-        calculateDamage(attacker, defender, move);
+        calculateDamage(attacker, defender, move, {
+          weather: weatherMult,
+          ability: abilityMult,
+          held:    heldMult * defHeldMult,
+          defAbil: defAbilMult,
+        });
 
       if (damage > 0) {
         defender.currentHP = Math.max(0, defender.currentHP - damage);
@@ -355,8 +354,15 @@ const BattleEngine = (() => {
           target: idx === 0 ? 'enemy' : 'player',
           move, damage, effectiveness, effectivenessText, isCrit
         });
+
+        // ── Held item reactions ──
+        const heldAfterMsgs   = (typeof HeldItems     !== 'undefined') ? HeldItems.triggerAfterAttack(attacker, damage)         : [];
+        const rockyHelmetMsgs = (typeof HeldItems     !== 'undefined') ? HeldItems.triggerOnHit(defender, move, attacker)       : [];
+        const abilityHitMsgs  = (typeof AbilitySystem !== 'undefined') ? AbilitySystem.triggerOnHit(defender, move, attacker)   : [];
+        const allReactMsgs    = [...heldAfterMsgs, ...rockyHelmetMsgs, ...abilityHitMsgs];
+        if (allReactMsgs.length) events.push({ type: 'effect', messages: allReactMsgs });
+
       } else {
-        // Status move
         events.push({
           type: 'move', user: label,
           target: idx === 0 ? 'enemy' : 'player',
@@ -364,36 +370,48 @@ const BattleEngine = (() => {
         });
       }
 
-      // Apply secondary effects
       const effectMsgs = applyEffect(move.effect, attacker, defender);
-      if (effectMsgs.length) {
-        events.push({ type: 'effect', messages: effectMsgs });
-      }
+      if (effectMsgs.length) events.push({ type: 'effect', messages: effectMsgs });
 
-      // Check for faint after this action
+      // Status cured by held item (Lum Berry)
+      const lumMsgs = (typeof HeldItems !== 'undefined') ? HeldItems.triggerOnStatusInflict(defender) : [];
+      if (lumMsgs.length) events.push({ type: 'effect', messages: lumMsgs });
+
       if (hasFainted(defender)) {
         events.push({ type: 'faint', pkmn: defender, side: idx === 0 ? 'enemy' : 'player' });
-        break; // No end-of-turn needed if someone fainted mid-turn
+        break;
       }
     }
 
-    // ── End-of-Turn Effects ──
+    // ── End-of-Turn ──
     if (!hasFainted(playerPkmn) && !hasFainted(enemyPkmn)) {
-      const eotMsgs = [
-        ...endOfTurnEffects(playerPkmn),
-        ...endOfTurnEffects(enemyPkmn)
-      ];
-      if (eotMsgs.length) {
-        events.push({ type: 'eot', messages: eotMsgs });
+      const eotMsgs = [];
+
+      // Status effects
+      eotMsgs.push(...endOfTurnEffects(playerPkmn));
+      eotMsgs.push(...endOfTurnEffects(enemyPkmn));
+
+      // Weather tick
+      if (typeof Weather !== 'undefined') {
+        eotMsgs.push(...Weather.tick([playerPkmn, enemyPkmn]));
       }
 
-      // Check faint after EOT effects
-      if (hasFainted(playerPkmn)) {
-        events.push({ type: 'faint', pkmn: playerPkmn, side: 'player' });
+      // Held items EOT (Leftovers, Sitrus)
+      if (typeof HeldItems !== 'undefined') {
+        eotMsgs.push(...HeldItems.triggerEndOfTurn(playerPkmn));
+        eotMsgs.push(...HeldItems.triggerEndOfTurn(enemyPkmn));
       }
-      if (hasFainted(enemyPkmn)) {
-        events.push({ type: 'faint', pkmn: enemyPkmn, side: 'enemy' });
+
+      // Ability EOT (Speed Boost)
+      if (typeof AbilitySystem !== 'undefined') {
+        eotMsgs.push(...AbilitySystem.triggerEndOfTurn(playerPkmn, Weather));
+        eotMsgs.push(...AbilitySystem.triggerEndOfTurn(enemyPkmn,  Weather));
       }
+
+      if (eotMsgs.length) events.push({ type: 'eot', messages: eotMsgs });
+
+      if (hasFainted(playerPkmn)) events.push({ type: 'faint', pkmn: playerPkmn, side: 'player' });
+      if (hasFainted(enemyPkmn))  events.push({ type: 'faint', pkmn: enemyPkmn,  side: 'enemy'  });
     }
 
     return events;

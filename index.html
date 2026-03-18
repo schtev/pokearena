@@ -32,11 +32,17 @@
         <button class="menu-btn" onclick="Screen.show('screen-team')">
           <span class="btn-icon">👥</span> Team Builder
         </button>
+        <button class="menu-btn" onclick="Screen.show('screen-dex')">
+          <span class="btn-icon">📖</span> Pokédex
+        </button>
         <button class="menu-btn" onclick="Screen.show('screen-online')">
           <span class="btn-icon">🌐</span> Online PvP
         </button>
+        <button class="menu-btn" onclick="Screen.show('screen-settings')">
+          <span class="btn-icon">⚙️</span> Settings
+        </button>
       </nav>
-      <div class="menu-footer">v0.1.0 — Built with ❤️</div>
+      <div class="menu-footer">v0.4.0 — Parts 1–4 complete</div>
     </div>
   </div>
 
@@ -54,6 +60,7 @@
       <!-- Current Team (6 slots) -->
       <div class="team-panel">
         <h3 class="panel-title">Your Team <span id="team-count">(0/6)</span></h3>
+        <div class="team-panel-hint">⠿ Drag to reorder • ℹ View stats • ✕ Remove</div>
         <div class="team-slots" id="team-slots">
           <div class="team-slot empty" data-slot="0">
             <span class="slot-num">1</span>
@@ -188,6 +195,14 @@
           </div>
           <div class="info-hp-nums" id="player-hp-nums">100 / 100</div>
           <div class="info-types" id="player-types"></div>
+          <!-- XP Bar (Part 5) -->
+          <div class="xp-bar-wrapper">
+            <span class="xp-label">EXP</span>
+            <div class="xp-bar-track">
+              <div class="xp-bar-fill" id="player-xp-bar-fill" style="width:0%"></div>
+            </div>
+            <span class="xp-text" id="player-xp-text"></span>
+          </div>
         </div>
       </div>
 
@@ -243,6 +258,19 @@
           <!-- Filled by JS -->
         </div>
       </div>
+
+      <!-- Bag Menu (hidden by default) -->
+      <div class="bag-menu hidden" id="bag-menu">
+        <button class="back-to-actions" onclick="BattleUI.showActions()">← Back</button>
+        <div class="bag-items-list" id="bag-items-list">
+          <!-- Filled by JS -->
+        </div>
+        <!-- Target picker: shown after selecting an item -->
+        <div class="bag-target hidden" id="bag-target">
+          <p class="bag-target-label">Use on which Pokémon?</p>
+          <div class="bag-target-grid" id="bag-target-grid"></div>
+        </div>
+      </div>
     </div>
 
     <!-- Tower HUD (shown only in tower mode) -->
@@ -250,8 +278,37 @@
       <span>🗼 Floor <span id="tower-floor-num">1</span></span>
     </div>
 
+    <!-- Weather HUD (Part 5) -->
+    <div class="weather-hud hidden" id="weather-hud"></div>
+
+    <!-- Battle Log (Part 6) -->
+    <button class="battle-log-btn" id="battle-log-btn" onclick="BattleLog.toggle()">📋 Log</button>
+    <div class="battle-log-panel hidden" id="battle-log-panel"></div>
+
+    <!-- Mute button -->
+    <button class="mute-btn" id="mute-btn" onclick="BattleUI.toggleMute()" title="Toggle sound">🔊</button>
+
     <!-- Back to menu -->
     <button class="escape-btn" onclick="Screen.show('screen-menu')">✕ Flee</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       EVOLUTION OVERLAY
+  ═══════════════════════════════════════ -->
+  <div class="evo-overlay hidden" id="evo-overlay">
+    <div class="evo-card">
+      <div class="evo-sparkles" id="evo-sparkles">✨✨✨</div>
+      <div class="evo-sprites">
+        <img id="evo-from-sprite" src="" alt="" />
+        <span class="evo-arrow">→</span>
+        <img id="evo-to-sprite"   src="" alt="" />
+      </div>
+      <div class="evo-text" id="evo-text">Bulbasaur is evolving!</div>
+      <div class="evo-result hidden" id="evo-result">
+        <div class="evo-result-name" id="evo-result-name">Ivysaur!</div>
+        <button class="big-btn" id="evo-continue-btn">Continue →</button>
+      </div>
+    </div>
   </div>
 
   <!-- ═══════════════════════════════════════
@@ -286,24 +343,199 @@
         </div>
       </div>
       <button class="big-btn" onclick="startTowerBattle()">Enter Tower →</button>
+      <button class="big-btn" id="tower-resume-btn" style="background:var(--accent-purple);box-shadow:0 4px 0 #6020a0" class="hidden" onclick="resumeTowerRun()">
+        🔄 <span id="tower-resume-floor">Resume Run</span>
+      </button>
       <button class="big-btn secondary" onclick="Screen.show('screen-team')">Build Team First</button>
     </div>
   </div>
 
   <!-- ═══════════════════════════════════════
-       SCREEN: ONLINE PVP (placeholder)
+       SCREEN: ONLINE PVP (Part 4)
   ═══════════════════════════════════════ -->
   <div id="screen-online" class="screen">
     <div class="screen-header">
-      <button class="back-btn" onclick="Screen.show('screen-menu')">← Back</button>
+      <button class="back-btn" onclick="PvP.disconnect(); Screen.show('screen-menu')">← Back</button>
       <h2 class="screen-title">🌐 Online PvP</h2>
+      <span id="pvp-online-count" class="pvp-count-badge">— trainers online</span>
+    </div>
+
+    <div class="pvp-layout">
+
+      <!-- Left: connect + matchmaking -->
+      <div class="pvp-left">
+        <div class="pvp-section">
+          <h3 class="pvp-section-title">Your Trainer</h3>
+          <input type="text" id="pvp-name-input" class="pvp-input"
+            placeholder="Enter your name..." maxlength="16" value="Trainer" />
+          <button class="big-btn" id="pvp-connect-btn"
+            onclick="PvP.connect(document.getElementById('pvp-name-input').value)">
+            Connect to Server
+          </button>
+        </div>
+
+        <div class="pvp-status-box">
+          <div id="pvp-status" class="pvp-status pvp-status-disconnected">
+            Not connected
+          </div>
+        </div>
+
+        <!-- Idle state: find match -->
+        <div id="pvp-idle" class="pvp-action-panel">
+          <p class="pvp-hint">Build your team in Team Builder, then find a match!</p>
+          <button class="big-btn" onclick="PvP.findMatch()">⚔️ Find Match</button>
+        </div>
+
+        <!-- Searching state -->
+        <div id="pvp-searching" class="pvp-action-panel hidden">
+          <div class="pvp-spinner">🔍</div>
+          <p class="pvp-hint">Searching for opponent...</p>
+          <button class="big-btn secondary" onclick="PvP.cancelSearch()">Cancel</button>
+        </div>
+
+        <!-- Matched state -->
+        <div id="pvp-matched" class="pvp-action-panel hidden">
+          <div class="pvp-match-found">⚔️ MATCH FOUND!</div>
+          <p class="pvp-hint">vs <strong id="pvp-opponent-name">???</strong></p>
+          <p class="pvp-hint" style="font-size:12px;color:var(--text-dim)">Loading battle...</p>
+        </div>
+      </div>
+
+      <!-- Right: team preview + chat -->
+      <div class="pvp-right">
+        <div class="pvp-section">
+          <h3 class="pvp-section-title">Your Team</h3>
+          <div class="pvp-team-preview" id="pvp-team-preview">
+            <!-- Filled by JS on screen show -->
+          </div>
+          <button class="big-btn secondary" onclick="Screen.show('screen-team')"
+            style="margin-top:10px;font-size:10px;padding:10px 20px">
+            Edit Team
+          </button>
+        </div>
+
+        <div class="pvp-section pvp-chat-section">
+          <h3 class="pvp-section-title">Battle Chat</h3>
+          <div class="pvp-chat-log" id="pvp-chat-log">
+            <div class="chat-line chat-system">Connect and find a match to chat!</div>
+          </div>
+          <div class="pvp-chat-input-row">
+            <input type="text" id="pvp-chat-input" class="pvp-input"
+              placeholder="Say something..." maxlength="80"
+              onkeydown="if(event.key==='Enter') { PvP.sendChat(this.value); this.value=''; }" />
+            <button class="pvp-chat-send"
+              onclick="const i=document.getElementById('pvp-chat-input'); PvP.sendChat(i.value); i.value=''">
+              Send
+            </button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       SCREEN: POKÉDEX (Part 4)
+  ═══════════════════════════════════════ -->
+  <div id="screen-dex" class="screen">
+    <div class="screen-header">
+      <button class="back-btn" onclick="Screen.show('screen-menu')">← Back</button>
+      <h2 class="screen-title">📖 Pokédex</h2>
+      <span class="dex-counter-badge" id="dex-counter">0 / 0 caught</span>
+    </div>
+
+    <div class="dex-controls">
+      <input type="text" class="dex-search" placeholder="Search by name..."
+        oninput="Pokedex.setFilter(this.value)" />
+      <div class="dex-type-filters" id="dex-type-filters">
+        <button class="dex-type-btn active" onclick="setDexType('all',this)">All</button>
+        <button class="dex-type-btn" onclick="setDexType('fire',this)">🔥 Fire</button>
+        <button class="dex-type-btn" onclick="setDexType('water',this)">💧 Water</button>
+        <button class="dex-type-btn" onclick="setDexType('grass',this)">🌿 Grass</button>
+        <button class="dex-type-btn" onclick="setDexType('electric',this)">⚡ Electric</button>
+        <button class="dex-type-btn" onclick="setDexType('psychic',this)">🔮 Psychic</button>
+        <button class="dex-type-btn" onclick="setDexType('dragon',this)">🐉 Dragon</button>
+        <button class="dex-type-btn" onclick="setDexType('ghost',this)">👻 Ghost</button>
+        <button class="dex-type-btn" onclick="setDexType('fighting',this)">🥊 Fighting</button>
+        <button class="dex-type-btn" onclick="setDexType('normal',this)">⬛ Normal</button>
+      </div>
+    </div>
+
+    <div class="dex-grid" id="dex-grid">
+      <!-- Filled by Pokedex.render() -->
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       SCREEN: SETTINGS / PROFILE (Part 4)
+  ═══════════════════════════════════════ -->
+  <div id="screen-settings" class="screen">
+    <div class="screen-header">
+      <button class="back-btn" onclick="Screen.show('screen-menu')">← Back</button>
+      <h2 class="screen-title">⚙️ Settings</h2>
       <div></div>
     </div>
-    <div class="coming-soon">
-      <div class="cs-icon">🌐</div>
-      <h3>Coming in Part 7</h3>
-      <p>Multiplayer will be added once the<br/>battle engine and tower are complete.</p>
-      <p class="cs-sub">We'll use Socket.io + a free Railway server.</p>
+
+    <div class="settings-layout">
+
+      <div class="settings-section">
+        <h3 class="settings-section-title">📊 Profile</h3>
+        <div class="settings-stat-grid">
+          <div class="settings-stat">
+            <span class="ss-label">Playtime</span>
+            <span class="ss-value" id="settings-playtime">0h 0m 0s</span>
+          </div>
+          <div class="settings-stat">
+            <span class="ss-label">Best Tower Floor</span>
+            <span class="ss-value" id="settings-best-floor">—</span>
+          </div>
+          <div class="settings-stat">
+            <span class="ss-label">Collection</span>
+            <span class="ss-value" id="settings-collection">—</span>
+          </div>
+          <div class="settings-stat">
+            <span class="ss-label">Last Saved</span>
+            <span class="ss-value" id="settings-last-saved">—</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3 class="settings-section-title">🔊 Audio</h3>
+        <div class="settings-row">
+          <label class="settings-label">Volume</label>
+          <input type="range" id="settings-volume" min="0" max="100" value="35"
+            oninput="Settings.setVolume(parseInt(this.value))" />
+          <span id="settings-volume-pct">35%</span>
+        </div>
+        <div class="settings-row">
+          <button class="settings-btn" id="settings-mute-btn"
+            onclick="Settings.toggleMute()">🔊 Mute Sound</button>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3 class="settings-section-title">🎮 Game</h3>
+        <div class="settings-row">
+          <button class="settings-btn secondary" onclick="SaveSystem.save(); TeamBuilder.showToast('Game saved!')">
+            💾 Save Now
+          </button>
+        </div>
+        <div class="settings-row">
+          <button class="settings-btn danger" onclick="Settings.confirmReset()">
+            🗑️ Reset All Data
+          </button>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3 class="settings-section-title">ℹ️ About</h3>
+        <p class="settings-about">PokéArena v0.4.0 — Parts 1–4 complete</p>
+        <p class="settings-about">Built with vanilla JS + Web Audio API.</p>
+        <p class="settings-about">Sprites © Nintendo / Game Freak via PokeAPI.</p>
+        <p class="settings-about">This is a fan project for educational purposes.</p>
+      </div>
+
     </div>
   </div>
 
@@ -319,7 +551,137 @@
     </div>
   </div>
 
+  <!-- ═══════════════════════════════════════
+       STATS SCREEN OVERLAY (Part 3)
+  ═══════════════════════════════════════ -->
+  <div class="stats-overlay hidden" id="stats-overlay">
+    <div class="stats-panel">
+
+      <!-- Header -->
+      <div class="stats-header">
+        <button class="back-btn" onclick="StatsScreen.hide()">← Back</button>
+        <div class="stats-title-group">
+          <span class="stats-num" id="stats-num">#001</span>
+          <span class="stats-name" id="stats-name">Bulbasaur</span>
+        </div>
+        <span class="stats-level-badge" id="stats-level">Lv. 50</span>
+      </div>
+
+      <div class="stats-body">
+
+        <!-- Left: sprite + types + evo chain -->
+        <div class="stats-left">
+          <div class="stats-sprite-box">
+            <img id="stats-sprite" src="" alt="" />
+          </div>
+          <div id="stats-types" class="stats-type-row"></div>
+
+          <!-- Level slider -->
+          <div class="stats-level-slider">
+            <label for="stats-level-input" style="font-size:11px;color:var(--text-muted)">Preview level:</label>
+            <input type="range" id="stats-level-input" min="1" max="100" value="50"
+              oninput="StatsScreen.setLevel(parseInt(this.value))" />
+          </div>
+
+          <!-- Evolution chain -->
+          <div class="stats-section-title">Evolution</div>
+          <div class="evo-chain-row" id="stats-evo-chain"></div>
+        </div>
+
+        <!-- Right: stats + moves + learnset -->
+        <div class="stats-right">
+
+          <!-- Stat bars -->
+          <div class="stats-section-title">Base Stats</div>
+          <div id="stats-bars" class="stats-bars-container"></div>
+
+          <!-- Moves -->
+          <div class="stats-section-title">Current Moves</div>
+          <div id="stats-moves" class="stats-moves-grid"></div>
+
+          <!-- Learnset -->
+          <div class="stats-section-title">
+            Full Learnset
+            <span style="font-size:10px;color:var(--text-dim);font-family:var(--font-body);font-weight:400;margin-left:8px">
+              (greyed = not yet learned)
+            </span>
+          </div>
+          <div id="stats-learnset" class="stats-learnset-container"></div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       LEARN MOVE OVERLAY (Part 3)
+  ═══════════════════════════════════════ -->
+  <div class="learn-overlay hidden" id="learn-overlay">
+    <div class="learn-card">
+      <div class="learn-title" id="learn-title">Pikachu wants to learn Thunder!</div>
+      <div class="learn-subtitle">But Pikachu already knows 4 moves.<br/>Delete a move to make room?</div>
+
+      <div class="learn-new-move" id="learn-new-move">
+        <!-- New move card rendered by JS -->
+      </div>
+
+      <div class="learn-vs">⬇ Replace one of these ⬇</div>
+
+      <div class="learn-move-slots" id="learn-move-slots">
+        <!-- Current move slots rendered by JS -->
+      </div>
+
+      <button class="big-btn secondary" id="learn-skip-btn" style="margin-top:12px">
+        Don't learn this move
+      </button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       FLOOR TRANSITION OVERLAY (Part 3)
+  ═══════════════════════════════════════ -->
+  <div class="floor-transition-overlay hidden" id="floor-transition-overlay">
+    <div class="ft-bg" id="ft-bg"></div>
+    <div class="ft-content">
+      <div class="ft-floor-num" id="ft-floor-num">FLOOR 1</div>
+      <div class="ft-type-row">
+        <span class="ft-type-icon" id="ft-type-icon">🧑</span>
+        <span class="ft-type-label" id="ft-type-label">Trainer Battle</span>
+      </div>
+      <div class="ft-divider"></div>
+      <div class="ft-section-label">Opponents</div>
+      <div class="ft-enemy-list" id="ft-enemy-list"></div>
+      <div class="ft-reward" id="ft-reward" style="display:none"></div>
+      <button class="big-btn" id="ft-begin-btn" style="margin-top:24px">⚔️ Begin Battle!</button>
+    </div>
+  </div>
+
+  <!-- Socket.io client (for PvP) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
   <!-- JS Modules -->
+  <!-- Part 2: Save, Items, Evolution, Audio -->
+  <script src="src/save/save.js"></script>
+  <script src="src/items/items.js"></script>
+  <script src="src/pokemon/evolution.js"></script>
+  <script src="src/audio/sound.js"></script>
+  <!-- Part 3: Learnsets, Move Learning, Stats Screen, Floor Transition -->
+  <script src="src/data/learnsets.js"></script>
+  <script src="src/pokemon/moveLearning.js"></script>
+  <script src="src/ui/statsScreen.js"></script>
+  <script src="src/tower/floorTransition.js"></script>
+  <!-- Part 4: Pokédex, Settings, PvP -->
+  <script src="src/ui/pokedex.js"></script>
+  <script src="src/ui/settings.js"></script>
+  <script src="src/online/pvp.js"></script>
+  <!-- Part 5: Weather, Abilities, Held Items, XP -->
+  <script src="src/battle/weather.js"></script>
+  <script src="src/battle/abilities.js"></script>
+  <script src="src/battle/heldItems.js"></script>
+  <script src="src/pokemon/xp.js"></script>
+  <!-- Part 6: Battle Log, Move Animations -->
+  <script src="src/ui/battleLog.js"></script>
+  <script src="src/battle/moveAnimations.js"></script>
+  <!-- Core -->
   <script src="src/data/pokemon.js"></script>
   <script src="src/data/moves.js"></script>
   <script src="src/battle/engine.js"></script>
