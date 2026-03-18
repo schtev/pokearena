@@ -64,8 +64,8 @@ function extractMoveKeys() {
   const moveRegex = /moves:\s*\[(.*?)\]/gs;
   let match;
   while ((match = moveRegex.exec(pkmnFile)) !== null) {
-    const keys = match[1].match(/'([^']+)'/g) || [];
-    keys.forEach(k => moveSet.add(k.replace(/'/g, '')));
+    const keys = match[1].match(/["']([^"']+)["']/g) || [];
+    keys.forEach(k => moveSet.add(k.replace(/['"]/g, '')));
   }
   return [...moveSet];
 }
