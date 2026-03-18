@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PokéArena</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════
+       SCREEN: MAIN MENU
+  ═══════════════════════════════════════ -->
+  <div id="screen-menu" class="screen active">
+    <div class="menu-bg">
+      <div class="menu-stars"></div>
+    </div>
+    <div class="menu-content">
+      <div class="logo">
+        <span class="logo-poke">Poké</span><span class="logo-arena">Arena</span>
+        <div class="logo-sub">Battle · Climb · Conquer</div>
+      </div>
+      <nav class="menu-nav">
+        <button class="menu-btn" onclick="Screen.show('screen-team')">
+          <span class="btn-icon">⚔️</span> Quick Battle
+        </button>
+        <button class="menu-btn" onclick="Screen.show('screen-tower-menu')">
+          <span class="btn-icon">🗼</span> Infinite Tower
+        </button>
+        <button class="menu-btn" onclick="Screen.show('screen-team')">
+          <span class="btn-icon">👥</span> Team Builder
+        </button>
+        <button class="menu-btn" onclick="Screen.show('screen-online')">
+          <span class="btn-icon">🌐</span> Online PvP
+        </button>
+      </nav>
+      <div class="menu-footer">v0.1.0 — Built with ❤️</div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       SCREEN: TEAM BUILDER
+  ═══════════════════════════════════════ -->
+  <div id="screen-team" class="screen">
+    <div class="screen-header">
+      <button class="back-btn" onclick="Screen.show('screen-menu')">← Back</button>
+      <h2 class="screen-title">Team Builder</h2>
+      <button class="action-btn" onclick="startBattle('cpu')">Battle! →</button>
+    </div>
+
+    <div class="team-layout">
+      <!-- Current Team (6 slots) -->
+      <div class="team-panel">
+        <h3 class="panel-title">Your Team <span id="team-count">(0/6)</span></h3>
+        <div class="team-slots" id="team-slots">
+          <div class="team-slot empty" data-slot="0">
+            <span class="slot-num">1</span>
+            <div class="slot-sprite-area">
+              <img class="slot-sprite" src="" alt="" />
+              <span class="slot-empty-label">Empty</span>
+            </div>
+            <div class="slot-info">
+              <span class="slot-name">—</span>
+            </div>
+            <button class="slot-remove" onclick="removeFromTeam(0)" title="Remove">✕</button>
+          </div>
+          <div class="team-slot empty" data-slot="1">
+            <span class="slot-num">2</span>
+            <div class="slot-sprite-area">
+              <img class="slot-sprite" src="" alt="" />
+              <span class="slot-empty-label">Empty</span>
+            </div>
+            <div class="slot-info">
+              <span class="slot-name">—</span>
+            </div>
+            <button class="slot-remove" onclick="removeFromTeam(1)" title="Remove">✕</button>
+          </div>
+          <div class="team-slot empty" data-slot="2">
+            <span class="slot-num">3</span>
+            <div class="slot-sprite-area">
+              <img class="slot-sprite" src="" alt="" />
+              <span class="slot-empty-label">Empty</span>
+            </div>
+            <div class="slot-info">
+              <span class="slot-name">—</span>
+            </div>
+            <button class="slot-remove" onclick="removeFromTeam(2)" title="Remove">✕</button>
+          </div>
+          <div class="team-slot empty" data-slot="3">
+            <span class="slot-num">4</span>
+            <div class="slot-sprite-area">
+              <img class="slot-sprite" src="" alt="" />
+              <span class="slot-empty-label">Empty</span>
+            </div>
+            <div class="slot-info">
+              <span class="slot-name">—</span>
+            </div>
+            <button class="slot-remove" onclick="removeFromTeam(3)" title="Remove">✕</button>
+          </div>
+          <div class="team-slot empty" data-slot="4">
+            <span class="slot-num">5</span>
+            <div class="slot-sprite-area">
+              <img class="slot-sprite" src="" alt="" />
+              <span class="slot-empty-label">Empty</span>
+            </div>
+            <div class="slot-info">
+              <span class="slot-name">—</span>
+            </div>
+            <button class="slot-remove" onclick="removeFromTeam(4)" title="Remove">✕</button>
+          </div>
+          <div class="team-slot empty" data-slot="5">
+            <span class="slot-num">6</span>
+            <div class="slot-sprite-area">
+              <img class="slot-sprite" src="" alt="" />
+              <span class="slot-empty-label">Empty</span>
+            </div>
+            <div class="slot-info">
+              <span class="slot-name">—</span>
+            </div>
+            <button class="slot-remove" onclick="removeFromTeam(5)" title="Remove">✕</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pokémon Collection -->
+      <div class="collection-panel">
+        <h3 class="panel-title">Your Collection</h3>
+        <div class="collection-filter">
+          <input type="text" id="search-pokemon" placeholder="Search Pokémon..." oninput="filterCollection()" />
+        </div>
+        <div class="collection-grid" id="collection-grid">
+          <!-- Filled by JS -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       SCREEN: BATTLE
+  ═══════════════════════════════════════ -->
+  <div id="screen-battle" class="screen">
+
+    <!-- Battle Arena -->
+    <div class="battle-arena">
+
+      <!-- Enemy Side -->
+      <div class="battle-side enemy-side">
+        <div class="battle-info-box enemy-info">
+          <div class="info-name-row">
+            <span class="info-name" id="enemy-name">CHARIZARD</span>
+            <span class="info-level" id="enemy-level">Lv.50</span>
+          </div>
+          <div class="hp-bar-wrapper">
+            <span class="hp-label">HP</span>
+            <div class="hp-bar-track">
+              <div class="hp-bar-fill" id="enemy-hp-bar" style="width:100%"></div>
+            </div>
+          </div>
+          <div class="info-hp-nums" id="enemy-hp-nums">150 / 150</div>
+          <div class="info-types" id="enemy-types"></div>
+        </div>
+        <div class="sprite-platform enemy-platform">
+          <img class="battle-sprite enemy-sprite" id="enemy-sprite"
+            src="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/6.png"
+            alt="Enemy Pokémon" />
+        </div>
+      </div>
+
+      <!-- Player Side -->
+      <div class="battle-side player-side">
+        <div class="sprite-platform player-platform">
+          <img class="battle-sprite player-sprite" id="player-sprite"
+            src="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/back/25.png"
+            alt="Your Pokémon" />
+        </div>
+        <div class="battle-info-box player-info">
+          <div class="info-name-row">
+            <span class="info-name" id="player-name">PIKACHU</span>
+            <span class="info-level" id="player-level">Lv.50</span>
+          </div>
+          <div class="hp-bar-wrapper">
+            <span class="hp-label">HP</span>
+            <div class="hp-bar-track">
+              <div class="hp-bar-fill" id="player-hp-bar" style="width:100%"></div>
+            </div>
+          </div>
+          <div class="info-hp-nums" id="player-hp-nums">100 / 100</div>
+          <div class="info-types" id="player-types"></div>
+        </div>
+      </div>
+
+      <!-- Battle Scene Decoration -->
+      <div class="battle-bg">
+        <div class="bg-sky"></div>
+        <div class="bg-ground"></div>
+      </div>
+    </div>
+
+    <!-- Battle UI Panel -->
+    <div class="battle-panel">
+
+      <!-- Message Box -->
+      <div class="battle-message" id="battle-message">
+        What will <span id="msg-pokemon-name">PIKACHU</span> do?
+      </div>
+
+      <!-- Action Menu -->
+      <div class="battle-actions" id="battle-actions">
+        <button class="action-choice" id="btn-fight" onclick="BattleUI.showMoves()">
+          ⚔️ FIGHT
+        </button>
+        <button class="action-choice" id="btn-bag" onclick="BattleUI.bag()">
+          🎒 BAG
+        </button>
+        <button class="action-choice" id="btn-pokemon" onclick="BattleUI.switchMenu()">
+          🔄 POKÉMON
+        </button>
+        <button class="action-choice" id="btn-run" onclick="BattleUI.run()">
+          🏃 RUN
+        </button>
+      </div>
+
+      <!-- Move Menu (hidden by default) -->
+      <div class="move-menu hidden" id="move-menu">
+        <button class="back-to-actions" onclick="BattleUI.showActions()">← Back</button>
+        <div class="moves-grid" id="moves-grid">
+          <!-- Filled by JS -->
+        </div>
+        <div class="move-detail" id="move-detail">
+          <span id="move-detail-type">—</span>
+          <span id="move-detail-cat">—</span>
+          <span id="move-detail-pp">PP: —/—</span>
+          <span id="move-detail-power">Power: —</span>
+        </div>
+      </div>
+
+      <!-- Switch Menu (hidden by default) -->
+      <div class="switch-menu hidden" id="switch-menu">
+        <button class="back-to-actions" onclick="BattleUI.showActions()">← Back</button>
+        <div class="switch-grid" id="switch-grid">
+          <!-- Filled by JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Tower HUD (shown only in tower mode) -->
+    <div class="tower-hud hidden" id="tower-hud">
+      <span>🗼 Floor <span id="tower-floor-num">1</span></span>
+    </div>
+
+    <!-- Back to menu -->
+    <button class="escape-btn" onclick="Screen.show('screen-menu')">✕ Flee</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       SCREEN: TOWER MENU
+  ═══════════════════════════════════════ -->
+  <div id="screen-tower-menu" class="screen">
+    <div class="screen-header">
+      <button class="back-btn" onclick="Screen.show('screen-menu')">← Back</button>
+      <h2 class="screen-title">🗼 Infinite Tower</h2>
+      <div></div>
+    </div>
+    <div class="tower-menu-content">
+      <div class="tower-stats">
+        <div class="tower-stat-card">
+          <span class="stat-label">Best Floor</span>
+          <span class="stat-value" id="best-floor">—</span>
+        </div>
+        <div class="tower-stat-card">
+          <span class="stat-label">Current Run</span>
+          <span class="stat-value" id="current-floor">Floor 1</span>
+        </div>
+        <div class="tower-stat-card">
+          <span class="stat-label">Unlocked Pokémon</span>
+          <span class="stat-value" id="unlocked-count">12</span>
+        </div>
+      </div>
+      <div class="floor-preview" id="floor-preview">
+        <div class="floor-card">
+          <div class="floor-type-badge">TRAINER</div>
+          <p>⚔️ Next up: Youngster Joey</p>
+          <p class="floor-reward">Reward: Unlock Rattata</p>
+        </div>
+      </div>
+      <button class="big-btn" onclick="startTowerBattle()">Enter Tower →</button>
+      <button class="big-btn secondary" onclick="Screen.show('screen-team')">Build Team First</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       SCREEN: ONLINE PVP (placeholder)
+  ═══════════════════════════════════════ -->
+  <div id="screen-online" class="screen">
+    <div class="screen-header">
+      <button class="back-btn" onclick="Screen.show('screen-menu')">← Back</button>
+      <h2 class="screen-title">🌐 Online PvP</h2>
+      <div></div>
+    </div>
+    <div class="coming-soon">
+      <div class="cs-icon">🌐</div>
+      <h3>Coming in Part 7</h3>
+      <p>Multiplayer will be added once the<br/>battle engine and tower are complete.</p>
+      <p class="cs-sub">We'll use Socket.io + a free Railway server.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       BATTLE RESULT OVERLAY
+  ═══════════════════════════════════════ -->
+  <div class="result-overlay hidden" id="result-overlay">
+    <div class="result-card">
+      <div class="result-icon" id="result-icon">🏆</div>
+      <div class="result-title" id="result-title">Victory!</div>
+      <div class="result-detail" id="result-detail"></div>
+      <button class="big-btn" onclick="afterBattle()">Continue →</button>
+    </div>
+  </div>
+
+  <!-- JS Modules -->
+  <script src="src/data/pokemon.js"></script>
+  <script src="src/data/moves.js"></script>
+  <script src="src/battle/engine.js"></script>
+  <script src="src/battle/cpu.js"></script>
+  <script src="src/battle/animations.js"></script>
+  <script src="src/team/teambuilder.js"></script>
+  <script src="src/tower/tower.js"></script>
+  <script src="src/ui/screen.js"></script>
+  <script src="src/main.js"></script>
+</body>
+</html>
