@@ -5029,7 +5029,7 @@ const POKEMON_DATA = {
     moves: ["hyperBeam","skyAttack","focusBlast","disable"],
     unlocked: false,
   },
-  zygarde-50: {
+  zygarde: {
     id: 718, name: 'Zygarde-50',
     types: ["dragon","ground"],
     baseStats: {"hp":108,"attack":100,"defense":121,"spatk":81,"spdef":95,"speed":95},

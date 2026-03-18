@@ -1012,3 +1012,61 @@ function setDexType(type, btn) {
   Pokedex.setTypeFilter(type);
 }
 
+//Commands
+window.PokeCheats = (function () {
+  const SECRET = "letmein"; // change this to whatever you want
+
+  function check(code) {
+    if (code !== SECRET) {
+      console.warn("Invalid cheat code");
+      return false;
+    }
+    return true;
+  }
+
+  function unlockPokemon(code, pokemonId) {
+    if (!check(code)) return;
+
+    if (!POKEMON_DATA[pokemonId]) {
+      console.warn("Pokemon not found:", pokemonId);
+      return;
+    }
+
+    POKEMON_DATA[pokemonId].unlocked = true;
+
+    console.log(`Unlocked ${pokemonId}`);
+  }
+
+  function unlockAll(code) {
+    if (!check(code)) return;
+
+    Object.keys(POKEMON_DATA).forEach(id => {
+      POKEMON_DATA[id].unlocked = true;
+    });
+
+    console.log("All Pokémon unlocked");
+  }
+
+  function lockAll(code) {
+    if (!check(code)) return;
+
+    Object.keys(POKEMON_DATA).forEach(id => {
+      POKEMON_DATA[id].unlocked = false;
+    });
+
+    console.log("All Pokémon locked");
+  }
+
+  function listLocked() {
+    return Object.entries(POKEMON_DATA)
+      .filter(([_, p]) => !p.unlocked)
+      .map(([id]) => id);
+  }
+
+  return {
+    unlockPokemon,
+    unlockAll,
+    lockAll,
+    listLocked
+  };
+})();
