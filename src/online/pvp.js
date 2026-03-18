@@ -25,7 +25,7 @@ const PvP = (() => {
   // The server URL — change this to your Railway/Render URL in production
   const SERVER_URL = window.location.hostname === 'localhost'
     ? 'http://localhost:3000'
-    : 'https://pokearena-server.up.railway.app'; // ← update this after deploying
+    : 'pokearena-production.up.railway.app'; // ← update this after deploying
 
   // ─── Connection ───────────────────────────────
   /**
