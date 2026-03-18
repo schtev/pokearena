@@ -48,7 +48,7 @@ A fan-made browser Pokémon battle game built with vanilla JavaScript.
 2. Go to your repo → **Settings** → **Pages**
 3. Under **Branch**, select `main` and folder `/root` (or `/ (root)`)
 4. Click **Save**
-5. Your game is live at `https://YOUR-USERNAME.github.io/pokearena` in ~60 seconds
+5. Your game is live at `[https://YOUR-USERNAME.github.io/pokearena](https://schtev.github.io/pokearena/)` in ~60 seconds
 
 ---
 
