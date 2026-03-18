@@ -55,12 +55,14 @@ const MoveAnimations = (() => {
         ctx.clearRect(0, 0, w, h);
         ctx.save();
         ctx.globalAlpha = (1 - t) * 0.7;
-        const grad = ctx.createRadialGradient(x, y, 0, x, y, radius * t * 1.5);
+        const safeRadius = Math.max(1, Math.abs(radius || 0));
+	const r = Math.max(1, safeRadius * t * 1.5);
+	const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
         grad.addColorStop(0, color + 'ff');
         grad.addColorStop(1, color + '00');
         ctx.fillStyle = grad;
         ctx.beginPath();
-        ctx.arc(x, y, radius * t * 1.5, 0, Math.PI * 2);
+        ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
         if (t < 1) requestAnimationFrame(frame);
