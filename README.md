@@ -2,7 +2,7 @@
 
 A fan-made browser Pokémon battle game built with vanilla JavaScript.
 
-**Play online:** https://YOUR-USERNAME.github.io/pokearena
+**Play online:** https://schtev.github.io/pokearena/
 
 ---
 
