@@ -53,7 +53,17 @@
     <div class="screen-header">
       <button class="back-btn" onclick="Screen.show('screen-menu')">← Back</button>
       <h2 class="screen-title">Team Builder</h2>
-      <button class="action-btn" onclick="startBattle('cpu')">Battle! →</button>
+      <div class="battle-launch-row">
+        <select id="quick-battle-level" class="level-picker" title="Battle level">
+          <option value="5">Lv 5</option>
+          <option value="10">Lv 10</option>
+          <option value="25">Lv 25</option>
+          <option value="50" selected>Lv 50</option>
+          <option value="75">Lv 75</option>
+          <option value="100">Lv 100</option>
+        </select>
+        <button class="action-btn" onclick="startBattle('cpu')">Battle! →</button>
+      </div>
     </div>
 
     <div class="team-layout">
@@ -289,7 +299,7 @@
     <button class="mute-btn" id="mute-btn" onclick="BattleUI.toggleMute()" title="Toggle sound">🔊</button>
 
     <!-- Back to menu -->
-    <button class="escape-btn" onclick="Screen.show('screen-menu')">✕ Flee</button>
+    <button class="escape-btn" onclick="Battle.playerFled()">✕ Flee</button>
   </div>
 
   <!-- ═══════════════════════════════════════
@@ -383,6 +393,17 @@
         <!-- Idle state: find match -->
         <div id="pvp-idle" class="pvp-action-panel">
           <p class="pvp-hint">Build your team in Team Builder, then find a match!</p>
+          <div class="pvp-level-row">
+            <label class="pvp-level-label">Battle level:</label>
+            <select id="pvp-battle-level" class="level-picker">
+              <option value="5">Lv 5</option>
+              <option value="10">Lv 10</option>
+              <option value="25">Lv 25</option>
+              <option value="50" selected>Lv 50</option>
+              <option value="75">Lv 75</option>
+              <option value="100">Lv 100</option>
+            </select>
+          </div>
           <button class="big-btn" onclick="PvP.findMatch()">⚔️ Find Match</button>
         </div>
 

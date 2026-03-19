@@ -19,8 +19,12 @@ const PvP = (() => {
   let playerSlot    = null;   // 0 or 1
   let opponentName  = null;
   let waitingForOpp = false;
-  let onMoveReceived= null;   // callback set by battle system
   let _connected    = false;
+
+  // Move queue — incoming moves are buffered here so they're never lost
+  // if they arrive before waitForOpponentMove() registers its callback.
+  const moveQueue    = [];
+  let   moveWaiter   = null;   // resolve fn of the currently-waiting Promise, or null
 
   // The server URL — change this to your Railway/Render URL in production
   const SERVER_URL = window.location.hostname === 'localhost'
@@ -86,13 +90,32 @@ const PvP = (() => {
     });
 
     // ── Move exchange ──
+    // Moves are pushed into a queue so they're never lost if they arrive
+    // before the battle engine has registered its next waiter.
     socket.on('opponentMove', (moveId) => {
-      if (onMoveReceived) onMoveReceived(moveId);
+      if (moveWaiter) {
+        // Battle engine is already waiting — resolve immediately
+        const resolve = moveWaiter;
+        moveWaiter = null;
+        resolve(moveId);
+      } else {
+        // Move arrived early — buffer it
+        moveQueue.push(moveId);
+      }
     });
 
     socket.on('opponentDisconnected', () => {
-      alert(`${opponentName} disconnected. You win!`);
-      endOnlineBattle(true);
+      // Unblock any pending waitForOpponentMove with a sentinel,
+      // then let the battle engine trigger the proper victory path.
+      if (moveWaiter) {
+        const resolve = moveWaiter;
+        moveWaiter = null;
+        resolve('__opponent_fled__');
+      }
+      // Also directly notify the battle module in case we're not mid-turn
+      if (typeof Battle !== 'undefined' && Battle.opponentFled) {
+        Battle.opponentFled(opponentName);
+      }
     });
 
     // ── Chat ──
@@ -115,6 +138,8 @@ const PvP = (() => {
     playerSlot    = null;
     opponentName  = null;
     waitingForOpp = false;
+    moveQueue.length = 0;
+    moveWaiter    = null;
   }
 
   // ─── Matchmaking ──────────────────────────────
@@ -158,11 +183,28 @@ const PvP = (() => {
   }
 
   /**
-   * Register a callback to be called when the opponent's move arrives.
-   * @param {Function} cb
+   * Returns a Promise that resolves with the next opponent move ID.
+   * If a move already arrived and is buffered in the queue, resolves immediately.
+   * This replaces the old callback-based onOpponentMove.
+   */
+  function waitForMove() {
+    return new Promise((resolve) => {
+      if (moveQueue.length > 0) {
+        // Move already arrived — consume it immediately
+        resolve(moveQueue.shift());
+      } else {
+        // Nothing yet — register as waiter
+        moveWaiter = resolve;
+      }
+    });
+  }
+
+  /**
+   * Legacy alias kept so Battle.start() opts still work.
+   * @param {Function} cb  — ignored; use waitForMove() instead
    */
   function onOpponentMove(cb) {
-    onMoveReceived = cb;
+    // No-op: move delivery is now handled by waitForMove()
   }
 
   // ─── Chat ─────────────────────────────────────
@@ -201,7 +243,7 @@ const PvP = (() => {
       pvp:     true,
       slot:    playerSlot,
       sendMove,
-      onOpponentMove,
+      onOpponentMove: waitForMove,   // queue-aware Promise-based receiver
     });
   }
 
@@ -265,7 +307,7 @@ const PvP = (() => {
 
   return {
     connect, disconnect, findMatch, cancelSearch,
-    sendMove, onOpponentMove, sendChat,
+    sendMove, onOpponentMove, waitForMove, sendChat,
     get connected() { return _connected; }
   };
 

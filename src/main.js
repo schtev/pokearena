@@ -112,10 +112,9 @@ const Battle = (() => {
   }
 
   // ─── Wait for opponent's move over the network ─
+  // pvpOnOppMove is now PvP.waitForMove — a function that returns a Promise.
   function waitForOpponentMove() {
-    return new Promise((resolve) => {
-      pvpOnOppMove(resolve);
-    });
+    return pvpOnOppMove(); // returns Promise<moveId>
   }
 
   // ─── Process player move choice ───────────────
@@ -133,26 +132,24 @@ const Battle = (() => {
 
     if (isPvP && pvpSendMove && pvpOnOppMove) {
       // ── PvP: exchange moves over the network ──
-      // Send our move to the opponent immediately
       pvpSendMove(move.id);
-
-      // Show waiting message while we hold for their move
       BattleUI.setMessage('⏳ Waiting for opponent...');
 
-      // Wait for the opponent's move id to arrive via socket
       const opponentMoveId = await waitForOpponentMove();
 
-      // Resolve the opponent's move object from their active Pokémon's moveset
-      const opponentMoveObj = enemy.moves.find(m => m.id === opponentMoveId)
-        || enemy.moves[0]; // fallback if id not matched
+      // Opponent fled mid-wait
+      if (opponentMoveId === '__opponent_fled__') {
+        await opponentFled(null);
+        return;
+      }
 
-      // pvpSlot 0 = local player is "player" side, opponent is "enemy" side
-      // pvpSlot 1 = local player is "enemy" side (server assigned us slot 1)
+      const opponentMoveObj = enemy.moves.find(m => m.id === opponentMoveId)
+        || enemy.moves[0];
+
       if (pvpSlot === 0) {
         playerMove = move;
         enemyMove  = opponentMoveObj;
       } else {
-        // We are the "enemy" side — swap so engine still runs consistently
         playerMove = opponentMoveObj;
         enemyMove  = move;
       }
@@ -399,6 +396,10 @@ const Battle = (() => {
       // Send a special switch signal and wait for the opponent's move.
       pvpSendMove && pvpSendMove('__switch__');
       const opponentMoveId = await waitForOpponentMove();
+      if (opponentMoveId === '__opponent_fled__') {
+        await opponentFled(null);
+        return;
+      }
       switchEnemyMove = getEnemy().moves.find(m => m.id === opponentMoveId)
         || getEnemy().moves[0];
     } else {
@@ -549,10 +550,50 @@ const Battle = (() => {
     busy = false;
   }
 
+  // ─── PvP: opponent disconnected / fled ────────
+  /**
+   * Called when the opponent disconnects mid-battle (from pvp.js socket event,
+   * or from the sentinel value returned by waitForOpponentMove).
+   * Ends the battle as a win for the local player.
+   * @param {string|null} name  - opponent name, or null if already known
+   */
+  async function opponentFled(name) {
+    if (!isPvP) return;
+    BattleAnimations.stopAllIdles();
+    SoundSystem.play('victory');
+    await BattleAnimations.wait(400);
+
+    const overlay = document.getElementById('result-overlay');
+    const icon    = document.getElementById('result-icon');
+    const title   = document.getElementById('result-title');
+    const detail  = document.getElementById('result-detail');
+
+    const oppName = name || 'Opponent';
+    icon.textContent  = '🏆';
+    title.textContent = 'Victory!';
+    detail.textContent = `${oppName} fled the battle!`;
+    overlay.classList.remove('hidden');
+    busy = false;
+  }
+
+  /**
+   * Called when the local player hits the Flee button during a PvP battle.
+   * Notifies the opponent via the socket before leaving.
+   */
+  function playerFled() {
+    if (isPvP) {
+      // Disconnecting from the socket triggers opponentDisconnected on their end
+      if (typeof PvP !== 'undefined') PvP.disconnect();
+    }
+    Screen.show('screen-menu');
+  }
+
   return {
     start,
     playerChoosesMove,
     playerSwitch,
+    playerFled,
+    opponentFled,
     getPlayer,
     getEnemy,
     get playerTeam() { return playerTeam; },
