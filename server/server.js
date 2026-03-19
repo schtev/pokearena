@@ -117,8 +117,8 @@ io.on('connection', (socket) => {
 
   // ── Move relay ──
   // Both clients send their move; server relays each to the OTHER player
-  socket.on('move', ({ room, moveId }) => {
-    socket.to(room).emit('opponentMove', moveId);
+  socket.on('move', ({ room, moveId, seed }) => {
+    socket.to(room).emit('opponentMove', { moveId, seed: seed >>> 0 });
   });
 
   // ── Chat relay ──
