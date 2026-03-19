@@ -7,6 +7,36 @@
 
 const BattleEngine = (() => {
 
+  // ─── Seeded RNG (Mulberry32) ───────────────────
+  // Used during executeTurn so both PvP clients produce
+  // identical results from the same seed.
+  let _rng = Math.random; // default: native random (CPU / local battles)
+
+  /**
+   * Seed the RNG for this turn.
+   * Call this before executeTurn in PvP mode.
+   * @param {number} seed  32-bit unsigned integer
+   */
+  function seedRng(seed) {
+    let s = seed >>> 0;
+    _rng = function() {
+      s |= 0; s = s + 0x6D2B79F5 | 0;
+      let t = Math.imul(s ^ s >>> 15, 1 | s);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+
+  /** Reset RNG back to native Math.random (for non-PvP battles). */
+  function resetRng() {
+    _rng = Math.random;
+  }
+
+  /** Generate a fresh random 32-bit seed to send to the opponent. */
+  function generateSeed() {
+    return (Math.random() * 0xFFFFFFFF) >>> 0;
+  }
+
   // ─── Stat stage multipliers ────────────────────
   // Stages run from -6 to +6
   const STAGE_MULT = {
@@ -57,9 +87,9 @@ const BattleEngine = (() => {
 
     const stab          = attacker.types.includes(move.type) ? 1.5 : 1;
     const effectiveness = getTypeEffectiveness(move.type, defender.types);
-    const isCrit        = Math.random() < 0.0625;
+    const isCrit        = _rng() < 0.0625;
     const critMult      = isCrit ? 1.5 : 1;
-    const random        = 0.85 + Math.random() * 0.15;
+    const random        = 0.85 + _rng() * 0.15;
     const burnMult      = (attacker.status === 'burned' && move.category === 'physical') ? 0.5 : 1;
 
     // External multipliers from weather, abilities, held items
@@ -86,10 +116,10 @@ const BattleEngine = (() => {
     if (defender.status === 'frozen' && move.type === 'fire') return true; // thaw
 
     // Status conditions that affect action
-    if (attacker.status === 'paralyzed' && Math.random() < 0.25) return false; // can't move
-    if (attacker.status === 'asleep') return false;                             // can't move
+    if (attacker.status === 'paralyzed' && _rng() < 0.25) return false; // can't move
+    if (attacker.status === 'asleep') return false;                       // can't move
 
-    return Math.random() * 100 < move.accuracy;
+    return _rng() * 100 < move.accuracy;
   }
 
   // ─── Turn Order ────────────────────────────────
@@ -119,7 +149,7 @@ const BattleEngine = (() => {
     }
 
     // Speed tie — coin flip
-    return Math.random() < 0.5 ? [0, 1] : [1, 0];
+    return _rng() < 0.5 ? [0, 1] : [1, 0];
   }
 
   // ─── Apply Move Effects ────────────────────────
@@ -139,21 +169,21 @@ const BattleEngine = (() => {
     // ── Status infliction ──
     if (effectStr.startsWith('burn')) {
       const chance = parseInt(effectStr.split('_')[1]) || 100;
-      if (!defender.status && Math.random() * 100 < chance) {
+      if (!defender.status && _rng() * 100 < chance) {
         defender.status = 'burned';
         msgs.push(`${defender.name} was burned!`);
       }
     }
     if (effectStr.startsWith('paralysis')) {
       const chance = parseInt(effectStr.split('_')[1]) || 100;
-      if (!defender.status && Math.random() * 100 < chance) {
+      if (!defender.status && _rng() * 100 < chance) {
         defender.status = 'paralyzed';
         msgs.push(`${defender.name} is paralyzed! It may be unable to move!`);
       }
     }
     if (effectStr.startsWith('poison') && !effectStr.includes('Powder')) {
       const chance = parseInt(effectStr.split('_')[1]) || 100;
-      if (!defender.status && Math.random() * 100 < chance) {
+      if (!defender.status && _rng() * 100 < chance) {
         defender.status = 'poisoned';
         msgs.push(`${defender.name} was poisoned!`);
       }
@@ -166,7 +196,7 @@ const BattleEngine = (() => {
     }
     if (effectStr.startsWith('freeze')) {
       const chance = parseInt(effectStr.split('_')[1]) || 100;
-      if (!defender.status && Math.random() * 100 < chance) {
+      if (!defender.status && _rng() * 100 < chance) {
         defender.status = 'frozen';
         msgs.push(`${defender.name} was frozen solid!`);
       }
@@ -174,7 +204,7 @@ const BattleEngine = (() => {
     if (effectStr === 'sleep') {
       if (!defender.status) {
         defender.status = 'asleep';
-        defender._sleepTurns = 1 + Math.floor(Math.random() * 3); // 1–3 turns
+        defender._sleepTurns = 1 + Math.floor(_rng() * 3); // 1–3 turns
         msgs.push(`${defender.name} fell asleep!`);
       }
     }
@@ -216,15 +246,15 @@ const BattleEngine = (() => {
       attacker.stages.spdef   = Math.max(-6, attacker.stages.spdef  - 1);
       msgs.push(`${attacker.name}'s defenses fell!`);
     }
-    if (effectStr === 'spdef_down_10' && Math.random() < 0.1) {
+    if (effectStr === 'spdef_down_10' && _rng() < 0.1) {
       defender.stages.spdef = Math.max(-6, defender.stages.spdef - 1);
       msgs.push(`${defender.name}'s Sp. Def fell!`);
     }
-    if (effectStr === 'spdef_down_20' && Math.random() < 0.2) {
+    if (effectStr === 'spdef_down_20' && _rng() < 0.2) {
       defender.stages.spdef = Math.max(-6, defender.stages.spdef - 1);
       msgs.push(`${defender.name}'s Sp. Def fell!`);
     }
-    if (effectStr === 'def_down_30' && Math.random() < 0.3) {
+    if (effectStr === 'def_down_30' && _rng() < 0.3) {
       defender.stages.defense = Math.max(-6, defender.stages.defense - 1);
       msgs.push(`${defender.name}'s Defense fell!`);
     }
@@ -266,7 +296,7 @@ const BattleEngine = (() => {
 
     if (pkmn.status === 'frozen') {
       // 20% chance to thaw each turn
-      if (Math.random() < 0.2) {
+      if (_rng() < 0.2) {
         pkmn.status = null;
         msgs.push(`${pkmn.name} thawed out!`);
       }
@@ -426,7 +456,12 @@ const BattleEngine = (() => {
     endOfTurnEffects,
     hasFainted,
     isTeamDefeated,
-    executeTurn
+    executeTurn,
+    // RNG control — used by PvP to ensure both clients run identical dice rolls
+    rng:          () => _rng(),
+    seedRng,
+    resetRng,
+    generateSeed,
   };
 
 })();
