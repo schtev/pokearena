@@ -112,9 +112,9 @@ const Battle = (() => {
   }
 
   // ─── Wait for opponent's move over the network ─
-  // pvpOnOppMove is now PvP.waitForMove — a function that returns a Promise.
+  // pvpOnOppMove is PvP.waitForMove — returns Promise<{ moveId, seed }>
   function waitForOpponentMove() {
-    return pvpOnOppMove(); // returns Promise<moveId>
+    return pvpOnOppMove(); // returns Promise<{ moveId, seed }>
   }
 
   // ─── Process player move choice ───────────────
@@ -131,11 +131,14 @@ const Battle = (() => {
     let playerMove, enemyMove;
 
     if (isPvP && pvpSendMove && pvpOnOppMove) {
-      // ── PvP: exchange moves over the network ──
-      pvpSendMove(move.id);
+      // ── PvP: exchange moves + shared RNG seed ──
+      // Generate the seed for this turn on our side and send it with our move.
+      // Both clients will use this same seed so every dice roll is identical.
+      const turnSeed = BattleEngine.generateSeed();
+      pvpSendMove(move.id, turnSeed);
       BattleUI.setMessage('⏳ Waiting for opponent...');
 
-      const opponentMoveId = await waitForOpponentMove();
+      const { moveId: opponentMoveId, seed: opponentSeed } = await waitForOpponentMove();
 
       // Opponent fled mid-wait
       if (opponentMoveId === '__opponent_fled__') {
@@ -153,6 +156,10 @@ const Battle = (() => {
         playerMove = opponentMoveObj;
         enemyMove  = move;
       }
+
+      // Combine both seeds so neither player controls the outcome unilaterally
+      const combinedSeed = (turnSeed ^ opponentSeed) >>> 0;
+      BattleEngine.seedRng(combinedSeed);
     } else {
       // ── CPU / local battle ──
       playerMove = move;
@@ -163,6 +170,7 @@ const Battle = (() => {
 
     // Run the turn through the engine
     const events = BattleEngine.executeTurn(player, enemy, playerMove, enemyMove);
+    BattleEngine.resetRng(); // restore native Math.random for non-engine code
 
     // Play events sequentially
     await processEvents(events);
@@ -393,20 +401,24 @@ const Battle = (() => {
     let switchEnemyMove;
     if (isPvP && pvpOnOppMove) {
       // In PvP, the switch itself is the player's "action" for this turn.
-      // Send a special switch signal and wait for the opponent's move.
-      pvpSendMove && pvpSendMove('__switch__');
-      const opponentMoveId = await waitForOpponentMove();
+      // Send a special switch signal + our seed and wait for the opponent's move.
+      const turnSeed = BattleEngine.generateSeed();
+      pvpSendMove && pvpSendMove('__switch__', turnSeed);
+      const { moveId: opponentMoveId, seed: opponentSeed } = await waitForOpponentMove();
       if (opponentMoveId === '__opponent_fled__') {
         await opponentFled(null);
         return;
       }
       switchEnemyMove = getEnemy().moves.find(m => m.id === opponentMoveId)
         || getEnemy().moves[0];
+      const combinedSeed = (turnSeed ^ opponentSeed) >>> 0;
+      BattleEngine.seedRng(combinedSeed);
     } else {
       switchEnemyMove = CPU.chooseMove(getEnemy(), getPlayer(), cpuTier);
     }
     const switchDummy = { name:'(switching)', power:0, accuracy:100, pp:99, currentPP:99, priority:5, type:'normal', category:'status' };
     const events = BattleEngine.executeTurn(getPlayer(), getEnemy(), switchDummy, switchEnemyMove);
+    BattleEngine.resetRng();
     await processEvents(events);
 
     if (BattleEngine.isTeamDefeated(playerTeam)) {
