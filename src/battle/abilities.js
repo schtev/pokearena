@@ -88,7 +88,7 @@ const AbilitySystem = (() => {
       name: 'Static',
       desc: '30% chance to paralyze attackers that make contact.',
       onHit(defender, move, attacker) {
-        if (move.category === 'physical' && !attacker.status && Math.random() < 0.3) {
+        if (move.category === 'physical' && !attacker.status && BattleEngine.rng() < 0.3) {
           attacker.status = 'paralyzed';
           return [`${defender.name}'s Static paralyzed ${attacker.name}!`];
         }
@@ -100,7 +100,7 @@ const AbilitySystem = (() => {
       name: 'Flame Body',
       desc: '30% chance to burn attackers that make contact.',
       onHit(defender, move, attacker) {
-        if (move.category === 'physical' && !attacker.status && Math.random() < 0.3) {
+        if (move.category === 'physical' && !attacker.status && BattleEngine.rng() < 0.3) {
           attacker.status = 'burned';
           return [`${defender.name}'s Flame Body burned ${attacker.name}!`];
         }
@@ -112,7 +112,7 @@ const AbilitySystem = (() => {
       name: 'Poison Point',
       desc: '30% chance to poison attackers that make contact.',
       onHit(defender, move, attacker) {
-        if (move.category === 'physical' && !attacker.status && Math.random() < 0.3) {
+        if (move.category === 'physical' && !attacker.status && BattleEngine.rng() < 0.3) {
           attacker.status = 'poisoned';
           return [`${defender.name}'s Poison Point poisoned ${attacker.name}!`];
         }
