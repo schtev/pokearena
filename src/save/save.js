@@ -28,6 +28,7 @@ const SaveSystem = (() => {
     unlocked:  ['bulbasaur','charmander','squirtle','pikachu','eevee'],
     bestFloor: 0,
     towerRun:  0,
+    pokemonLevels: {},   // key → level earned through the tower
     inventory: {
       potion:       3,
       superPotion:  1,
@@ -84,6 +85,10 @@ const SaveSystem = (() => {
     if (!parsed.inventory) {
       parsed.inventory = { ...DEFAULTS.inventory };
     }
+    // v2 → v3: add pokemonLevels if missing
+    if (!parsed.pokemonLevels) {
+      parsed.pokemonLevels = {};
+    }
     parsed.version = SAVE_VERSION;
     return { ...DEFAULTS, ...parsed };
   }
@@ -98,6 +103,13 @@ const SaveSystem = (() => {
   function getUnlocked()  { return get().unlocked; }
   function getBestFloor() { return get().bestFloor; }
   function getInventory() { return get().inventory; }
+  function getPokemonLevels() { return get().pokemonLevels || {}; }
+  function getTowerLevel(key) { return (get().pokemonLevels || {})[key] || 5; }
+  function setTowerLevel(key, level) {
+    if (!get().pokemonLevels) get().pokemonLevels = {};
+    get().pokemonLevels[key] = level;
+    save();
+  }
 
   function setTeam(arr) {
     get().team = arr;
@@ -160,6 +172,7 @@ const SaveSystem = (() => {
   return {
     load, save, reset, get,
     getTeam, getUnlocked, getBestFloor, getInventory,
+    getPokemonLevels, getTowerLevel, setTowerLevel,
     setTeam, unlockPokemon, setBestFloor, setTowerRun,
     getItemCount, addItem, useItem,
     getPlaytimeString

@@ -92,6 +92,18 @@ const TeamBuilder = (() => {
       .filter(Boolean);
   }
 
+  // For tower: each Pokémon uses its saved tower level (min 5)
+  function buildTowerTeam() {
+    return playerTeam.filter(Boolean)
+      .map(key => {
+        const level = SaveSystem.getTowerLevel(key);
+        const inst  = createPokemonInstance(key, level);
+        if (inst) inst.xp = XPSystem ? XPSystem.xpForLevel(level) : 0;
+        return inst;
+      })
+      .filter(Boolean);
+  }
+
   function unlock(key) {
     if (!unlockedPokemon.includes(key)) {
       unlockedPokemon.push(key);
@@ -134,6 +146,16 @@ const TeamBuilder = (() => {
         const nameEl   = el.querySelector('.slot-name');
         if (spriteEl) { spriteEl.src = getSpriteUrl(pkmn.id); spriteEl.alt = pkmn.name; }
         if (nameEl)   nameEl.textContent = pkmn.name;
+
+        // Tower level badge
+        let lvlEl = el.querySelector('.slot-tower-level');
+        if (!lvlEl) {
+          lvlEl = document.createElement('span');
+          lvlEl.className = 'slot-tower-level';
+          el.querySelector('.slot-info').insertBefore(lvlEl, el.querySelector('.slot-info').firstChild);
+        }
+        const towerLv = (typeof SaveSystem !== 'undefined') ? SaveSystem.getTowerLevel(key) : 5;
+        lvlEl.textContent = `🗼 Lv.${towerLv}`;
 
         // Types
         let typesEl = el.querySelector('.slot-types');
@@ -393,7 +415,7 @@ const TeamBuilder = (() => {
 
   return {
     init, addToTeam, removeFromTeam, swapSlots, getTeam,
-    buildBattleTeam, unlock, renderTeamSlots, renderCollection, showToast,
+    buildBattleTeam, buildTowerTeam, unlock, renderTeamSlots, renderCollection, showToast,
     get teamSize() { return playerTeam.filter(Boolean).length; }
   };
 

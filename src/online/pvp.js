@@ -184,11 +184,12 @@ const PvP = (() => {
 
   // ─── Online battle integration ─────────────────
   function startOnlineBattle(data) {
-    const playerTeam = TeamBuilder.buildBattleTeam(50);
+    const level = parseInt(document.getElementById('pvp-battle-level')?.value || '50', 10);
+    const playerTeam = TeamBuilder.buildBattleTeam(level);
 
-    // Build opponent team from their key list (use level 50 instances)
+    // Build opponent team from their key list at the same level
     const enemyTeam = (data.opponentTeam || ['charizard','blastoise','venusaur'])
-      .map(k => createPokemonInstance(k, 50))
+      .map(k => createPokemonInstance(k, level))
       .filter(Boolean);
 
     Screen.show('screen-battle');

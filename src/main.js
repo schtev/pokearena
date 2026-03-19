@@ -40,6 +40,12 @@ const Battle = (() => {
   let cpuTier      = 1;
   let busy         = false; // prevents double-clicks during animations
 
+  // ─── PvP state ────────────────────────────────
+  let isPvP          = false;
+  let pvpSlot        = 0;    // 0 = player is side 0, 1 = player is side 1
+  let pvpSendMove    = null; // function(moveId)
+  let pvpOnOppMove   = null; // function(cb) — registers callback for opponent move
+
   // ─── Getters ──────────────────────────────────
   const getPlayer  = () => playerTeam[playerActive];
   const getEnemy   = () => enemyTeam[enemyActive];
@@ -53,6 +59,12 @@ const Battle = (() => {
     isTowerMode  = opts.tower || false;
     cpuTier      = opts.cpuTier || 1;
     busy         = false;
+
+    // PvP setup
+    isPvP        = opts.pvp       || false;
+    pvpSlot      = opts.slot      ?? 0;
+    pvpSendMove  = opts.sendMove  || null;
+    pvpOnOppMove = opts.onOpponentMove || null;
 
     // Reset weather each battle
     if (typeof Weather !== 'undefined') Weather.reset();
@@ -99,6 +111,13 @@ const Battle = (() => {
     }
   }
 
+  // ─── Wait for opponent's move over the network ─
+  function waitForOpponentMove() {
+    return new Promise((resolve) => {
+      pvpOnOppMove(resolve);
+    });
+  }
+
   // ─── Process player move choice ───────────────
   async function playerChoosesMove(moveIndex) {
     if (busy) return;
@@ -110,13 +129,43 @@ const Battle = (() => {
     busy = true;
     BattleUI.lockInput();
 
-    // CPU picks its move
-    const cpuMove = CPU.chooseMove(enemy, player, cpuTier, {
-      cpuTeam: enemyTeam, playerTeam, turnNumber: 0
-    });
+    let playerMove, enemyMove;
+
+    if (isPvP && pvpSendMove && pvpOnOppMove) {
+      // ── PvP: exchange moves over the network ──
+      // Send our move to the opponent immediately
+      pvpSendMove(move.id);
+
+      // Show waiting message while we hold for their move
+      BattleUI.setMessage('⏳ Waiting for opponent...');
+
+      // Wait for the opponent's move id to arrive via socket
+      const opponentMoveId = await waitForOpponentMove();
+
+      // Resolve the opponent's move object from their active Pokémon's moveset
+      const opponentMoveObj = enemy.moves.find(m => m.id === opponentMoveId)
+        || enemy.moves[0]; // fallback if id not matched
+
+      // pvpSlot 0 = local player is "player" side, opponent is "enemy" side
+      // pvpSlot 1 = local player is "enemy" side (server assigned us slot 1)
+      if (pvpSlot === 0) {
+        playerMove = move;
+        enemyMove  = opponentMoveObj;
+      } else {
+        // We are the "enemy" side — swap so engine still runs consistently
+        playerMove = opponentMoveObj;
+        enemyMove  = move;
+      }
+    } else {
+      // ── CPU / local battle ──
+      playerMove = move;
+      enemyMove  = CPU.chooseMove(enemy, player, cpuTier, {
+        cpuTeam: enemyTeam, playerTeam, turnNumber: 0
+      });
+    }
 
     // Run the turn through the engine
-    const events = BattleEngine.executeTurn(player, enemy, move, cpuMove);
+    const events = BattleEngine.executeTurn(player, enemy, playerMove, enemyMove);
 
     // Play events sequentially
     await processEvents(events);
@@ -343,9 +392,20 @@ const Battle = (() => {
     BattleUI.refreshSide('player');
     await BattleAnimations.wait(400);
 
-    // CPU gets a free attack on the switch
-    const cpuMove  = CPU.chooseMove(getEnemy(), getPlayer(), cpuTier);
-    const events   = BattleEngine.executeTurn(getPlayer(), getEnemy(), { name:'(switching)', power:0, accuracy:100, pp:99, currentPP:99, priority:5, type:'normal', category:'status' }, cpuMove);
+    // Opponent gets a free attack on the switch
+    let switchEnemyMove;
+    if (isPvP && pvpOnOppMove) {
+      // In PvP, the switch itself is the player's "action" for this turn.
+      // Send a special switch signal and wait for the opponent's move.
+      pvpSendMove && pvpSendMove('__switch__');
+      const opponentMoveId = await waitForOpponentMove();
+      switchEnemyMove = getEnemy().moves.find(m => m.id === opponentMoveId)
+        || getEnemy().moves[0];
+    } else {
+      switchEnemyMove = CPU.chooseMove(getEnemy(), getPlayer(), cpuTier);
+    }
+    const switchDummy = { name:'(switching)', power:0, accuracy:100, pp:99, currentPP:99, priority:5, type:'normal', category:'status' };
+    const events = BattleEngine.executeTurn(getPlayer(), getEnemy(), switchDummy, switchEnemyMove);
     await processEvents(events);
 
     if (BattleEngine.isTeamDefeated(playerTeam)) {
@@ -394,6 +454,11 @@ const Battle = (() => {
 
           // Animate XP bar
           XPSystem.animateGain('player', pkmn, totalXP);
+
+          // Persist the new level so the next tower battle starts at it
+          if (typeof SaveSystem !== 'undefined') {
+            SaveSystem.setTowerLevel(pkmn.key, pkmn.level);
+          }
 
           levelEvents.forEach(ev => {
             showLevelUpToast(`${pkmn.name} grew to Lv.${ev.newLevel}!`);
@@ -935,13 +1000,14 @@ function startBattle(mode) {
   }
 
   SoundSystem.play('menuSelect');
-  const playerTeam = TeamBuilder.buildBattleTeam(50);
+  const level = parseInt(document.getElementById('quick-battle-level')?.value || '50', 10);
+  const playerTeam = TeamBuilder.buildBattleTeam(level);
 
-  // Random enemy team scaled to player team size
+  // Random enemy team scaled to player team size and chosen level
   const cpuPool  = ['charizard','blastoise','venusaur','pikachu','gengar','snorlax','lapras','machamp','dragonite'];
   const shuffled = cpuPool.sort(() => Math.random() - 0.5);
   const enemyTeam = shuffled.slice(0, Math.min(playerTeam.length, 3))
-    .map(k => createPokemonInstance(k, 50))
+    .map(k => createPokemonInstance(k, level))
     .filter(Boolean);
 
   Screen.show('screen-battle');
@@ -961,7 +1027,7 @@ async function startTowerBattle() {
 
   const floorNum  = Tower.getCurrentFloor();
   const floorData = Tower.generateFloor(floorNum);
-  const playerTeam= TeamBuilder.buildBattleTeam(50);
+  const playerTeam= TeamBuilder.buildTowerTeam();
   const cpuTier   = CPU.getTierForFloor(floorNum);
 
   // Show animated floor transition, then start battle
@@ -997,7 +1063,7 @@ async function resumeTowerRun() {
 
   const floorNum  = Tower.getCurrentFloor();
   const floorData = Tower.generateFloor(floorNum);
-  const playerTeam= TeamBuilder.buildBattleTeam(50);
+  const playerTeam= TeamBuilder.buildTowerTeam();
   const cpuTier   = CPU.getTierForFloor(floorNum);
 
   Screen.show('screen-battle');
