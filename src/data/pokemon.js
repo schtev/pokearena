@@ -6,8 +6,16 @@
 const SPRITE_BASE      = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon';
 const SPRITE_BACK_BASE = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/back';
 
-function getSpriteUrl(id)     { return `${SPRITE_BASE}/${id}.png`; }
-function getBackSpriteUrl(id) { return `${SPRITE_BACK_BASE}/${id}.png`; }
+function getSpriteUrl(id, shiny=false) {
+  return shiny
+    ? `${SPRITE_BASE}/shiny/${id}.png`
+    : `${SPRITE_BASE}/${id}.png`;
+}
+function getBackSpriteUrl(id, shiny=false) {
+  return shiny
+    ? `${SPRITE_BACK_BASE}/shiny/${id}.png`
+    : `${SPRITE_BACK_BASE}/${id}.png`;
+}
 
 const POKEMON_DATA = {
   bulbasaur: {
@@ -6299,7 +6307,7 @@ const POKEMON_DATA = {
 };
 
 // ─── Helpers (same as before) ───────────────
-function createPokemonInstance(key, level = 50) {
+function createPokemonInstance(key, level = 50, opts = {}) {
   const template = POKEMON_DATA[key];
   if (!template) { console.error('No Pokémon:', key); return null; }
   const bs = template.baseStats;
@@ -6321,8 +6329,9 @@ function createPokemonInstance(key, level = 50) {
              spatk: calcStat(bs.spatk),   spdef: calcStat(bs.spdef), speed: calcStat(bs.speed) },
     moves, status: null,
     stages: { attack:0, defense:0, spatk:0, spdef:0, speed:0 },
-    spriteUrl:     getSpriteUrl(template.id),
-    backSpriteUrl: getBackSpriteUrl(template.id),
+    isShiny:       opts?.shiny || false,
+    spriteUrl:     getSpriteUrl(template.id,     opts?.shiny || false),
+    backSpriteUrl: getBackSpriteUrl(template.id, opts?.shiny || false),
   };
 }
 

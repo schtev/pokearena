@@ -92,27 +92,24 @@ const PvP = (() => {
     // ── Move exchange ──
     // Moves are pushed into a queue so they're never lost if they arrive
     // before the battle engine has registered its next waiter.
-    socket.on('opponentMove', (moveId) => {
+    socket.on('opponentMove', ({ moveId, seed }) => {
+      const payload = { moveId, seed: seed >>> 0 };
       if (moveWaiter) {
-        // Battle engine is already waiting — resolve immediately
         const resolve = moveWaiter;
         moveWaiter = null;
-        resolve(moveId);
+        resolve(payload);
       } else {
-        // Move arrived early — buffer it
-        moveQueue.push(moveId);
+        moveQueue.push(payload);
       }
     });
 
     socket.on('opponentDisconnected', () => {
-      // Unblock any pending waitForOpponentMove with a sentinel,
-      // then let the battle engine trigger the proper victory path.
+      const fled = { moveId: '__opponent_fled__', seed: 0 };
       if (moveWaiter) {
         const resolve = moveWaiter;
         moveWaiter = null;
-        resolve('__opponent_fled__');
+        resolve(fled);
       }
-      // Also directly notify the battle module in case we're not mid-turn
       if (typeof Battle !== 'undefined' && Battle.opponentFled) {
         Battle.opponentFled(opponentName);
       }
@@ -176,24 +173,21 @@ const PvP = (() => {
    * so we only need to exchange move indices, not game state.
    * @param {string} moveId
    */
-  function sendMove(moveId) {
+  function sendMove(moveId, seed) {
     if (socket && roomId) {
-      socket.emit('move', { room: roomId, moveId });
+      socket.emit('move', { room: roomId, moveId, seed: seed >>> 0 });
     }
   }
 
   /**
-   * Returns a Promise that resolves with the next opponent move ID.
+   * Returns a Promise that resolves with { moveId, seed } for the next opponent turn.
    * If a move already arrived and is buffered in the queue, resolves immediately.
-   * This replaces the old callback-based onOpponentMove.
    */
   function waitForMove() {
     return new Promise((resolve) => {
       if (moveQueue.length > 0) {
-        // Move already arrived — consume it immediately
         resolve(moveQueue.shift());
       } else {
-        // Nothing yet — register as waiter
         moveWaiter = resolve;
       }
     });

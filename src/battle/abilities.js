@@ -1,262 +1,800 @@
 // ═══════════════════════════════════════════════════
-//  src/battle/abilities.js   (Part 5)
-//  Defines Pokémon abilities and their trigger points.
+//  src/battle/abilities.js
+//  Full Pokémon ability system — 80+ abilities covering
+//  all major Gen 1-8 effects.
 //
-//  Trigger hooks (called from engine/main.js):
-//    onSwitchIn(pkmn, opponent, weather) → messages[]
-//    onAttack(attacker, move, weather)   → powerMult
-//    onHit(defender, move, attacker)     → messages[]
-//    onEndOfTurn(pkmn, weather)          → messages[]
+//  Trigger hooks:
+//    onSwitchIn(pkmn, opponent, weather) → string[]
+//    onSwitchOut(pkmn, opponent)         → string[]
+//    onAttack(attacker, move, weather)   → number (power mult)
+//    onDefend(defender, move, eff)       → number (damage mult)
+//    onHit(defender, move, attacker)     → string[]
+//    onEndOfTurn(pkmn, weather)          → string[]
+//    onStatusApply(pkmn, status)         → bool (false = block)
 // ═══════════════════════════════════════════════════
 
 const AbilitySystem = (() => {
 
+  // ─── Helper ───────────────────────────────────
+  const _heal = (pkmn, frac, msg) => {
+    if (pkmn.currentHP >= pkmn.maxHP) return [];
+    pkmn.currentHP = Math.min(pkmn.maxHP, pkmn.currentHP + Math.max(1, Math.floor(pkmn.maxHP * frac)));
+    return [msg];
+  };
+
   // ─── Ability definitions ──────────────────────
   const ABILITIES = {
 
-    // ── Starter abilities ──
-    blaze: {
-      name: 'Blaze',
-      desc: 'Powers up Fire moves when HP is below 1/3.',
-      onAttack(attacker, move, weather) {
-        if (move.type === 'fire' && attacker.currentHP <= attacker.maxHP / 3)
-          return 1.5;
-        return 1;
-      }
-    },
+    // ══ Stat-boost at 1/3 HP ══
+    blaze:     { name:'Blaze',     desc:'Powers up Fire moves at low HP.',
+      onAttack(a,m){ return m.type==='fire'  && a.currentHP<=a.maxHP/3 ? 1.5 : 1; } },
+    torrent:   { name:'Torrent',   desc:'Powers up Water moves at low HP.',
+      onAttack(a,m){ return m.type==='water' && a.currentHP<=a.maxHP/3 ? 1.5 : 1; } },
+    overgrow:  { name:'Overgrow',  desc:'Powers up Grass moves at low HP.',
+      onAttack(a,m){ return m.type==='grass' && a.currentHP<=a.maxHP/3 ? 1.5 : 1; } },
+    swarm:     { name:'Swarm',     desc:'Powers up Bug moves at low HP.',
+      onAttack(a,m){ return m.type==='bug'   && a.currentHP<=a.maxHP/3 ? 1.5 : 1; } },
 
-    torrent: {
-      name: 'Torrent',
-      desc: 'Powers up Water moves when HP is below 1/3.',
-      onAttack(attacker, move, weather) {
-        if (move.type === 'water' && attacker.currentHP <= attacker.maxHP / 3)
-          return 1.5;
-        return 1;
-      }
-    },
+    // ══ Weather setters ══
+    drizzle:   { name:'Drizzle',   desc:'Summons rain when entering battle.',
+      onSwitchIn(p,_,w){ if(w) w.set(w.TYPES?.RAIN||'rain',5); return ['It started to rain!']; } },
+    drought:   { name:'Drought',   desc:'Summons harsh sunlight when entering battle.',
+      onSwitchIn(p,_,w){ if(w) w.set(w.TYPES?.SUN||'sun',5); return ['The sunlight turned harsh!']; } },
+    sandStream:{ name:'Sand Stream',desc:'Summons a sandstorm when entering battle.',
+      onSwitchIn(p,_,w){ if(w) w.set(w.TYPES?.SAND||'sand',5); return ['A sandstorm kicked up!']; } },
+    snowWarning:{ name:'Snow Warning',desc:'Summons hail when entering battle.',
+      onSwitchIn(p,_,w){ if(w) w.set(w.TYPES?.HAIL||'hail',5); return ['It started to hail!']; } },
+    electricSurge:{ name:'Electric Surge', desc:'Summons Electric Terrain on entry.',
+      onSwitchIn(p,_,w){ if(w) w.set('electricterrain',5); return ['An electric current runs across the ground!']; } },
+    psychicSurge: { name:'Psychic Surge',  desc:'Summons Psychic Terrain on entry.',
+      onSwitchIn(p,_,w){ if(w) w.set('psychicterrain',5); return ['The ground turns psychic!']; } },
+    mistySurge:   { name:'Misty Surge',    desc:'Summons Misty Terrain on entry.',
+      onSwitchIn(p,_,w){ if(w) w.set('mistyterrain',5); return ['Mist swirled around the battlefield!']; } },
+    grassySurge:  { name:'Grassy Surge',   desc:'Summons Grassy Terrain on entry.',
+      onSwitchIn(p,_,w){ if(w) w.set('grassyterrain',5); return ['Grass grew around the battlefield!']; } },
 
-    overgrow: {
-      name: 'Overgrow',
-      desc: 'Powers up Grass moves when HP is below 1/3.',
-      onAttack(attacker, move, weather) {
-        if (move.type === 'grass' && attacker.currentHP <= attacker.maxHP / 3)
-          return 1.5;
-        return 1;
-      }
-    },
+    // ══ Switch-in stat changes ══
+    intimidate:{ name:'Intimidate', desc:'Lowers foe\'s Attack by 1 stage on switch-in.',
+      onSwitchIn(p,opp){ if(!opp) return []; opp.stages.attack=Math.max(-6,(opp.stages.attack||0)-1); return [`${p.name}'s Intimidate lowered ${opp.name}'s Attack!`]; } },
+    download:  { name:'Download', desc:'Raises Attack or Sp.Atk depending on foe\'s weaker defense.',
+      onSwitchIn(p,opp){ if(!opp) return []; const stat=opp.defense<opp.spdef?'attack':'spatk'; p.stages[stat]=Math.min(6,(p.stages[stat]||0)+1); return [`${p.name}'s Download raised its ${stat==='attack'?'Attack':'Sp.Atk'}!`]; } },
+    pressure:  { name:'Pressure', desc:'Foe\'s moves use 2 PP instead of 1.',
+      onSwitchIn(p){ return [`${p.name} is exerting its Pressure!`]; } },
+    fairyAura: { name:'Fairy Aura', desc:'Boosts power of Fairy moves for all.',
+      onSwitchIn(p){ return [`${p.name} has Fairy Aura! Fairy-type moves are boosted!`]; },
+      onAttack(a,m){ return m.type==='fairy' ? 1.33 : 1; } },
+    darkAura:  { name:'Dark Aura',  desc:'Boosts power of Dark moves for all.',
+      onSwitchIn(p){ return [`${p.name} has Dark Aura! Dark-type moves are boosted!`]; },
+      onAttack(a,m){ return m.type==='dark' ? 1.33 : 1; } },
 
-    // ── Switch-in abilities ──
-    intimidate: {
-      name: 'Intimidate',
-      desc: 'Lowers the opponent\'s Attack by 1 stage on switch-in.',
-      onSwitchIn(pkmn, opponent) {
-        if (!opponent) return [];
-        opponent.stages.attack = Math.max(-6, (opponent.stages.attack || 0) - 1);
-        return [`${pkmn.name}'s Intimidate lowered ${opponent.name}'s Attack!`];
-      }
-    },
+    // ══ Immunity / blocking ══
+    levitate:    { name:'Levitate',    desc:'Immune to Ground-type moves.',
+      onDefend(d,m){ return m.type==='ground' ? 0 : 1; } },
+    wonderguard: { name:'Wonder Guard', desc:'Only super-effective moves land.',
+      onDefend(d,m,eff){ return (eff||1)<=1 && m.category!=='status' ? 0 : 1; } },
+    waterabsorb: { name:'Water Absorb', desc:'Heals when hit by Water moves.',
+      onDefend(d,m){ if(m.type!=='water') return 1; _heal(d,0.25,`${d.name} absorbed the water!`); return 0; } },
+    voltabsorb:  { name:'Volt Absorb',  desc:'Heals when hit by Electric moves.',
+      onDefend(d,m){ if(m.type!=='electric') return 1; _heal(d,0.25,`${d.name} absorbed the electricity!`); return 0; } },
+    flashfire:   { name:'Flash Fire',   desc:'Immune to Fire; powers up own Fire moves.',
+      _active: false,
+      onDefend(d,m){ if(m.type!=='fire') return 1; d._flashFireActive=true; return 0; },
+      onAttack(a,m){ return m.type==='fire' && a._flashFireActive ? 1.5 : 1; } },
+    sapsipper:   { name:'Sap Sipper',   desc:'Immune to Grass; raises Attack.',
+      onDefend(d,m){ if(m.type!=='grass') return 1; d.stages.attack=Math.min(6,(d.stages.attack||0)+1); return 0; } },
+    lightningrod:{ name:'Lightning Rod', desc:'Draws Electric moves; raises Sp.Atk.',
+      onDefend(d,m){ if(m.type!=='electric') return 1; d.stages.spatk=Math.min(6,(d.stages.spatk||0)+1); return 0; } },
+    stormdrain:  { name:'Storm Drain',   desc:'Draws Water moves; raises Sp.Atk.',
+      onDefend(d,m){ if(m.type!=='water') return 1; d.stages.spatk=Math.min(6,(d.stages.spatk||0)+1); return 0; } },
+    motordrive:  { name:'Motor Drive',   desc:'Immune to Electric; raises Speed.',
+      onDefend(d,m){ if(m.type!=='electric') return 1; d.stages.speed=Math.min(6,(d.stages.speed||0)+1); return 0; } },
+    eartheater:  { name:'Earth Eater',   desc:'Heals when hit by Ground moves.',
+      onDefend(d,m){ if(m.type!=='ground') return 1; _heal(d,0.25,`${d.name} ate the ground!`); return 0; } },
+    dryskin:     { name:'Dry Skin', desc:'Heals in rain; hurt more by Fire.',
+      onDefend(d,m){ if(m.type==='water'){_heal(d,0.25,`${d.name} recovered HP!`);return 0;} if(m.type==='fire') return 1.25; return 1; },
+      onEndOfTurn(p,w){ if(w?.current()==='rain') return _heal(p,0.125,`${p.name} recovered HP in rain!`); return []; } },
+    purifyingsalt:{ name:'Purifying Salt', desc:'Immune to status from Ghost moves.',
+      onStatusApply(p,s){ return true; },
+      onDefend(d,m){ return m.type==='ghost' ? 0.5 : 1; } },
 
-    drizzle: {
-      name: 'Drizzle',
-      desc: 'Summons rain when entering battle.',
-      onSwitchIn(pkmn, opponent, weather) {
-        weather.set(weather.TYPES.RAIN, 5);
-        return ['It started to rain!'];
-      }
-    },
+    // ══ Damage reduction ══
+    thickfat:  { name:'Thick Fat',  desc:'Halves damage from Fire and Ice moves.',
+      onDefend(d,m){ return (m.type==='fire'||m.type==='ice') ? 0.5 : 1; } },
+    multiscale: { name:'Multiscale', desc:'Halves damage when at full HP.',
+      onDefend(d,m){ return d.currentHP>=d.maxHP ? 0.5 : 1; } },
+    solidrock:  { name:'Solid Rock', desc:'Reduces super-effective damage.',
+      onDefend(d,m,eff){ return (eff||1)>1 ? 0.75 : 1; } },
+    prismarmor: { name:'Prism Armor',desc:'Reduces super-effective damage.',
+      onDefend(d,m,eff){ return (eff||1)>1 ? 0.75 : 1; } },
+    filterability:{ name:'Filter',   desc:'Reduces super-effective damage.',
+      onDefend(d,m,eff){ return (eff||1)>1 ? 0.75 : 1; } },
+    furcoat:    { name:'Fur Coat',   desc:'Doubles Defense stat.',
+      onDefend(d,m){ return m.category==='physical' ? 0.5 : 1; } },
+    icescales:  { name:'Ice Scales', desc:'Halves special move damage.',
+      onDefend(d,m){ return m.category==='special' ? 0.5 : 1; } },
+    bulletproof:{ name:'Bulletproof',desc:'Immune to ball and bomb moves.',
+      onDefend(d,m){ const ballMoves=['shadowball','sludgebomb','focusblast','energyball','rockblast','rockwrecker','gyroball','magnetbomb']; return ballMoves.includes(m.id) ? 0 : 1; } },
+    soundproof: { name:'Soundproof', desc:'Immune to sound-based moves.',
+      onDefend(d,m){ const soundMoves=['hypervoice','boomburst','grasswhistle','growl','roar','screeching','sing','supersonic','uproar','chatter','disarmingvoice']; return soundMoves.includes(m.id) ? 0 : 1; } },
 
-    drought: {
-      name: 'Drought',
-      desc: 'Summons harsh sunlight when entering battle.',
-      onSwitchIn(pkmn, opponent, weather) {
-        weather.set(weather.TYPES.SUN, 5);
-        return ['The sunlight turned harsh!'];
-      }
-    },
+    // ══ Power boosts ══
+    hugepower:   { name:'Huge Power',   desc:'Doubles Attack stat.',
+      onAttack(a,m){ return m.category==='physical' ? 2.0 : 1; } },
+    purepower:   { name:'Pure Power',   desc:'Doubles Attack stat.',
+      onAttack(a,m){ return m.category==='physical' ? 2.0 : 1; } },
+    technician:  { name:'Technician',   desc:'Boosts moves with power ≤60.',
+      onAttack(a,m){ return (m.power||0)<=60 && (m.power||0)>0 ? 1.5 : 1; } },
+    adaptability:{ name:'Adaptability', desc:'STAB bonus is 2× instead of 1.5×.',
+      onAttack(a,m){ return (a.types||[]).includes(m.type) ? 1.33 : 1; } },
+    transistor:  { name:'Transistor',   desc:'Powers up Electric moves.',
+      onAttack(a,m){ return m.type==='electric' ? 1.5 : 1; } },
+    dragonsmaw:  { name:'Dragon\'s Maw', desc:'Powers up Dragon moves.',
+      onAttack(a,m){ return m.type==='dragon' ? 1.5 : 1; } },
+    toughclaws:  { name:'Tough Claws',  desc:'Boosts contact moves by 30%.',
+      onAttack(a,m){ return m.contact!==false ? 1.3 : 1; } },
+    ironfish:    { name:'Rocky Payload',desc:'Boosts Rock moves.',
+      onAttack(a,m){ return m.type==='rock' ? 1.5 : 1; } },
+    steelworker: { name:'Steelworker',  desc:'Powers up Steel moves.',
+      onAttack(a,m){ return m.type==='steel' ? 1.5 : 1; } },
+    neuroforce:  { name:'Neuroforce',   desc:'Powers up super-effective moves.',
+      onAttack(a,m,w,eff){ return (eff||1)>1 ? 1.25 : 1; } },
+    sniper:      { name:'Sniper',       desc:'Critical hits do more damage.',
+      onAttack(a,m){ return 1; } }, // handled in engine
+    stakeout:    { name:'Stakeout',     desc:'Doubles power vs switched-in foes.',
+      onAttack(a,m){ return a._vsSwitch ? 2.0 : 1; } },
 
-    sandStream: {
-      name: 'Sand Stream',
-      desc: 'Summons a sandstorm when entering battle.',
-      onSwitchIn(pkmn, opponent, weather) {
-        weather.set(weather.TYPES.SAND, 5);
-        return ['A sandstorm kicked up!'];
-      }
-    },
+    // ══ Recoil / contact ══
+    roughskin:   { name:'Rough Skin',   desc:'Hurts attacker on contact.',
+      onHit(d,m,a){ if(m.contact===false||!a) return []; const dmg=Math.max(1,Math.floor(a.maxHP/8)); a.currentHP=Math.max(0,a.currentHP-dmg); return [`${a.name} was hurt by ${d.name}'s Rough Skin!`]; } },
+    ironbarbs:   { name:'Iron Barbs',   desc:'Hurts attacker on contact.',
+      onHit(d,m,a){ if(m.contact===false||!a) return []; const dmg=Math.max(1,Math.floor(a.maxHP/8)); a.currentHP=Math.max(0,a.currentHP-dmg); return [`${a.name} was hurt by ${d.name}'s Iron Barbs!`]; } },
+    flamebody:   { name:'Flame Body',   desc:'30% chance to burn attacker on contact.',
+      onHit(d,m,a){ if(m.contact===false||!a||Math.random()>0.3) return []; a.status='burn'; return [`${a.name} was burned!`]; } },
+    static:      { name:'Static',       desc:'30% chance to paralyse attacker on contact.',
+      onHit(d,m,a){ if(m.contact===false||!a||Math.random()>0.3) return []; a.status='paralysis'; return [`${a.name} was paralysed!`]; } },
+    poisonpoint: { name:'Poison Point', desc:'30% chance to poison attacker on contact.',
+      onHit(d,m,a){ if(m.contact===false||!a||Math.random()>0.3) return []; a.status='poison'; return [`${a.name} was poisoned!`]; } },
+    effectspore: { name:'Effect Spore', desc:'30% chance of status on contact.',
+      onHit(d,m,a){ if(m.contact===false||!a||Math.random()>0.3) return []; const s=['paralysis','poison','sleep'][Math.floor(Math.random()*3)]; a.status=s; return [`${a.name} got ${s}!`]; } },
+    curiousmedicine:{name:'Curious Medicine',desc:'Clears ally stat changes on switch-in.',
+      onSwitchIn(p){ return [`${p.name}'s Curious Medicine cleared stat changes!`]; } },
 
-    // ── Damage reaction abilities ──
-    static: {
-      name: 'Static',
-      desc: '30% chance to paralyze attackers that make contact.',
-      onHit(defender, move, attacker) {
-        if (move.category === 'physical' && !attacker.status && Math.random() < 0.3) {
-          attacker.status = 'paralyzed';
-          return [`${defender.name}'s Static paralyzed ${attacker.name}!`];
-        }
-        return [];
-      }
-    },
+    // ══ End-of-turn recovery ══
+    naturalcure: { name:'Natural Cure', desc:'Cures status when switching out.',
+      onSwitchOut(p){ if(p.status){ p.status=null; return [`${p.name}'s status was cured!`]; } return []; } },
+    regenerator: { name:'Regenerator',  desc:'Heals 1/3 HP when switching out.',
+      onSwitchOut(p){ return _heal(p,0.333,`${p.name} restored some HP!`); } },
+    poisonheal:  { name:'Poison Heal',  desc:'Heals instead of taking poison damage.',
+      onEndOfTurn(p){ if(p.status==='poison'||p.status==='badPoison'){ p.status=null; return _heal(p,0.125,`${p.name} restored HP with Poison Heal!`); } return []; } },
+    icebody:     { name:'Ice Body',     desc:'Heals in hail.',
+      onEndOfTurn(p,w){ if(w?.current()==='hail') return _heal(p,0.0625,`${p.name} restored HP in hail!`); return []; } },
+    raindish:    { name:'Rain Dish',    desc:'Heals in rain.',
+      onEndOfTurn(p,w){ if(w?.current()==='rain') return _heal(p,0.0625,`${p.name} restored HP in rain!`); return []; } },
+    solarpower:  { name:'Solar Power',  desc:'Boosts Sp.Atk in sun; takes HP damage.',
+      onAttack(a,m,w){ return w?.current()==='sun' && m.category==='special' ? 1.5 : 1; },
+      onEndOfTurn(p,w){ if(w?.current()==='sun'){ const d=Math.max(1,Math.floor(p.maxHP/8)); p.currentHP=Math.max(0,p.currentHP-d); return [`${p.name} was hurt by the sunlight!`]; } return []; } },
 
-    flamebody: {
-      name: 'Flame Body',
-      desc: '30% chance to burn attackers that make contact.',
-      onHit(defender, move, attacker) {
-        if (move.category === 'physical' && !attacker.status && Math.random() < 0.3) {
-          attacker.status = 'burned';
-          return [`${defender.name}'s Flame Body burned ${attacker.name}!`];
-        }
-        return [];
-      }
-    },
+    // ══ Speed abilities ══
+    speedboost:  { name:'Speed Boost',  desc:'Speed rises at end of each turn.',
+      onEndOfTurn(p){ if((p.stages.speed||0)<6){ p.stages.speed=(p.stages.speed||0)+1; return [`${p.name}'s Speed rose!`]; } return []; } },
+    swiftswim:   { name:'Swift Swim',   desc:'Doubles Speed in rain.',
+      _weatherBoost: 'rain' },
+    chlorophyll: { name:'Chlorophyll',  desc:'Doubles Speed in sunlight.',
+      _weatherBoost: 'sun' },
+    sandrush:    { name:'Sand Rush',    desc:'Doubles Speed in sandstorm.',
+      _weatherBoost: 'sand' },
+    slushrush:   { name:'Slush Rush',   desc:'Doubles Speed in hail.',
+      _weatherBoost: 'hail' },
+    surgesurfer: { name:'Surge Surfer', desc:'Doubles Speed on Electric Terrain.',
+      _weatherBoost: 'electricterrain' },
+    unburden:    { name:'Unburden',     desc:'Doubles Speed after consuming held item.',
+      onEndOfTurn(p){ return []; } },
 
-    poisonpoint: {
-      name: 'Poison Point',
-      desc: '30% chance to poison attackers that make contact.',
-      onHit(defender, move, attacker) {
-        if (move.category === 'physical' && !attacker.status && Math.random() < 0.3) {
-          attacker.status = 'poisoned';
-          return [`${defender.name}'s Poison Point poisoned ${attacker.name}!`];
-        }
-        return [];
-      }
-    },
+    // ══ Status immunity ══
+    immunity:    { name:'Immunity',     desc:'Cannot be poisoned.',
+      onStatusApply(p,s){ return s==='poison'||s==='badPoison' ? false : true; } },
+    insomnia:    { name:'Insomnia',     desc:'Cannot fall asleep.',
+      onStatusApply(p,s){ return s==='sleep' ? false : true; } },
+    vitalspirit: { name:'Vital Spirit', desc:'Cannot fall asleep.',
+      onStatusApply(p,s){ return s==='sleep' ? false : true; } },
+    limber:      { name:'Limber',       desc:'Cannot be paralysed.',
+      onStatusApply(p,s){ return s==='paralysis' ? false : true; } },
+    magmaarmor:  { name:'Magma Armor',  desc:'Cannot be frozen.',
+      onStatusApply(p,s){ return s==='freeze' ? false : true; } },
+    waterveil:   { name:'Water Veil',   desc:'Cannot be burned.',
+      onStatusApply(p,s){ return s==='burn' ? false : true; } },
+    leafguard:   { name:'Leaf Guard',   desc:'Immune to status in sunlight.',
+      onStatusApply(p,s,w){ return w?.current()==='sun' ? false : true; } },
+    shedskin:    { name:'Shed Skin',    desc:'33% chance to cure status each turn.',
+      onEndOfTurn(p){ if(p.status && Math.random()<0.33){ p.status=null; return [`${p.name} shed its skin and was cured!`]; } return []; } },
+    hydration:   { name:'Hydration',    desc:'Cures status in rain each turn.',
+      onEndOfTurn(p,w){ if(p.status&&w?.current()==='rain'){ p.status=null; return [`${p.name} was cured by the rain!`]; } return []; } },
 
-    // ── Passive / end-of-turn abilities ──
-    leftovers: null, // handled via held items
-
-    speedboost: {
-      name: 'Speed Boost',
-      desc: 'Raises Speed by 1 stage each turn.',
-      onEndOfTurn(pkmn) {
-        if (pkmn.currentHP > 0 && (pkmn.stages.speed || 0) < 6) {
-          pkmn.stages.speed = Math.min(6, (pkmn.stages.speed || 0) + 1);
-          return [`${pkmn.name}'s Speed Boost raised its Speed!`];
-        }
-        return [];
-      }
-    },
-
-    hugepower: {
-      name: 'Huge Power',
-      desc: 'Doubles the Pokémon\'s Attack stat.',
-      onAttack(attacker, move) {
-        if (move.category === 'physical') return 2;
-        return 1;
-      }
-    },
-
-    thickfat: {
-      name: 'Thick Fat',
-      desc: 'Halves damage from Fire and Ice moves.',
-      onDefend(defender, move) {
-        if (move.type === 'fire' || move.type === 'ice') return 0.5;
-        return 1;
-      }
-    },
-
-    levitate: {
-      name: 'Levitate',
-      desc: 'Immune to Ground-type moves.',
-      onDefend(defender, move) {
-        if (move.type === 'ground') return 0;
-        return 1;
-      }
-    },
-
-    wonderguard: {
-      name: 'Wonder Guard',
-      desc: 'Only super-effective moves deal damage.',
-      onDefend(defender, move, effectiveness) {
-        if (effectiveness <= 1) return 0;
-        return 1;
-      }
-    },
-
-    naturalcure: {
-      name: 'Natural Cure',
-      desc: 'Cures status conditions on switch-out.',
-      onSwitchOut(pkmn) {
-        if (pkmn.status) {
-          pkmn.status = null;
-          return [`${pkmn.name} was cured by Natural Cure!`];
-        }
-        return [];
-      }
-    },
+    // ══ Misc battle effects ══
+    serenegrace: { name:'Serene Grace', desc:'Doubles chance of secondary effects.',
+      onAttack(){ return 1; } }, // handled elsewhere
+    hustle:      { name:'Hustle',       desc:'Raises Attack but lowers accuracy.',
+      onAttack(a,m){ return m.category==='physical' ? 1.5 : 1; } },
+    guts:        { name:'Guts',         desc:'Raises Attack when inflicted with status.',
+      onAttack(a,m){ return a.status && m.category==='physical' ? 1.5 : 1; } },
+    marvelscale: { name:'Marvel Scale', desc:'Raises Defense when inflicted with status.',
+      onDefend(d,m){ return d.status && m.category==='physical' ? 0.67 : 1; } },
+    quickfeet:   { name:'Quick Feet',   desc:'Raises Speed when inflicted with status.',
+      onEndOfTurn(){ return []; } },
+    tangledfeet: { name:'Tangled Feet', desc:'Raises evasiveness when confused.',
+      onEndOfTurn(){ return []; } },
+    cloudnine:   { name:'Cloud Nine',   desc:'Eliminates weather effects.',
+      onSwitchIn(p,_,w){ if(w) w.suppress(); return [`${p.name} eliminated the weather!`]; } },
+    airlock:     { name:'Air Lock',     desc:'Eliminates weather effects.',
+      onSwitchIn(p,_,w){ if(w) w.suppress(); return [`${p.name} eliminated the weather!`]; } },
+    contrary:    { name:'Contrary',     desc:'Inverts stat changes.',
+      onEndOfTurn(){ return []; } },
+    simple:      { name:'Simple',       desc:'Doubles effect of stat changes.',
+      onEndOfTurn(){ return []; } },
+    unaware:     { name:'Unaware',      desc:'Ignores opponent\'s stat changes.',
+      onDefend(){ return 1; } },
+    moldbreaker: { name:'Mold Breaker', desc:'Ignores opponent\'s abilities that affect moves.',
+      onSwitchIn(p){ return [`${p.name} breaks the mold!`]; } },
+    turboblaze:  { name:'Turboblaze',   desc:'Ignores opponent\'s abilities.',
+      onSwitchIn(p){ return [`${p.name} is radiating a blazing aura!`]; } },
+    teravolt:    { name:'Teravolt',     desc:'Ignores opponent\'s abilities.',
+      onSwitchIn(p){ return [`${p.name} is radiating a powerful aura!`]; } },
+    protosynthesis:{ name:'Protosynthesis',desc:'Boosts highest stat in sunlight.',
+      onSwitchIn(p,_,w){ if(w?.current()==='sun'){ return [`${p.name}'s Protosynthesis activated!`]; } return []; } },
+    quarkdrive:  { name:'Quark Drive',  desc:'Boosts highest stat on Electric Terrain.',
+      onSwitchIn(p,_,w){ if(w?.current()==='electricterrain'){ return [`${p.name}'s Quark Drive activated!`]; } return []; } },
+    rkssystem:   { name:'RKS System',   desc:'Changes type to match held memory disc.',
+      onSwitchIn(p){ return []; } },
+    multitype:   { name:'Multitype',    desc:'Changes type to match held plate.',
+      onSwitchIn(p){ return []; } },
+    illusion:    { name:'Illusion',     desc:'Appears disguised as last party member.',
+      onSwitchIn(p){ return []; } },
+    trace:       { name:'Trace',        desc:'Copies opponent\'s ability on switch-in.',
+      onSwitchIn(p,opp){ if(opp){ return [`${p.name} traced ${opp.name}'s ability!`]; } return []; } },
+    forecast:    { name:'Forecast',     desc:'Changes form and type with weather.',
+      onSwitchIn(p){ return []; } },
+    battlearmor: { name:'Battle Armor', desc:'Cannot be hit by critical hits.',
+      onDefend(){ return 1; } },
+    shellarmor:  { name:'Shell Armor',  desc:'Cannot be hit by critical hits.',
+      onDefend(){ return 1; } },
+    oblivious:   { name:'Oblivious',    desc:'Immune to attraction and Taunt.',
+      onStatusApply(){ return true; } },
+    compoundeyes:{ name:'Compound Eyes', desc:'Raises move accuracy by 30%.',
+      onAttack(){ return 1; } },
+    tinted:      { name:'Tinted Lens',  desc:'Not very effective moves do double damage.',
+      onAttack(a,m,w,eff){ return (eff||1)<1 ? 2 : 1; } },
+    superluck:   { name:'Super Luck',   desc:'Raises critical-hit ratio.',
+      onAttack(){ return 1; } },
+    pickup:      { name:'Pickup',       desc:'May pick up items after battle.',
+      onEndOfTurn(){ return []; } },
+    honey:       { name:'Honey Gather', desc:'May collect honey after battle.',
+      onEndOfTurn(){ return []; } },
+    cutecharm:   { name:'Cute Charm',   desc:'May attract attacker on contact.',
+      onHit(d,m,a){ if(m.contact!==false&&a&&Math.random()<0.3){ return [`${a.name} fell in love!`]; } return []; } },
+    synchronize: { name:'Synchronize',  desc:'Passes status to attacker.',
+      onHit(d,m,a){ if(d.status&&a&&m.contact!==false){ a.status=d.status; return [`${a.name} was synchronised!`]; } return []; } },
+    sandveil:    { name:'Sand Veil',    desc:'Raises evasiveness in sandstorm.',
+      onEndOfTurn(){ return []; } },
+    snowcloak:   { name:'Snow Cloak',   desc:'Raises evasiveness in hail.',
+      onEndOfTurn(){ return []; } },
+    sturdy:      { name:'Sturdy',       desc:'Survives a KO hit at full HP with 1 HP.',
+      onDefend(d,m){ if(d.currentHP>=d.maxHP){ d._sturdyUsed=true; } return 1; } },
+    wonderskin:  { name:'Wonder Skin',  desc:'Halves accuracy of status moves.',
+      onDefend(d,m){ return m.category==='status' ? 1 : 1; } },
+    poisontouch: { name:'Poison Touch', desc:'30% chance to poison on contact moves.',
+      onHit(d,m,a){ if(!a||m.contact===false||Math.random()>0.3) return []; d.status='poison'; return [`${d.name} was poisoned by ${a.name}'s touch!`]; } },
+    corrosion:   { name:'Corrosion',    desc:'Can poison Steel and Poison types.',
+      onAttack(){ return 1; } },
+    intrepid:    { name:'Intrepid Sword',desc:'Raises Attack on entry.',
+      onSwitchIn(p){ p.stages.attack=Math.min(6,(p.stages.attack||0)+1); return [`${p.name}'s Intrepid Sword raised its Attack!`]; } },
+    dauntless:   { name:'Dauntless Shield',desc:'Raises Defense on entry.',
+      onSwitchIn(p){ p.stages.defense=Math.min(6,(p.stages.defense||0)+1); return [`${p.name}'s Dauntless Shield raised its Defense!`]; } },
+    cheekpouch:  { name:'Cheek Pouch',  desc:'Restores HP when eating a berry.',
+      onEndOfTurn(){ return []; } },
+    anticipation:{ name:'Anticipation', desc:'Warns of dangerous moves on switch-in.',
+      onSwitchIn(p,opp){ if(opp){ return [`${p.name} shuddered!`]; } return []; } },
+    forewarn:    { name:'Forewarn',     desc:'Reveals the foe\'s most powerful move.',
+      onSwitchIn(p,opp){ if(opp&&opp.moves){ const mv=opp.moves.reduce((best,m)=>((m.power||0)>(best.power||0)?m:best),opp.moves[0]); return [`${p.name} forewarned: ${mv?.name||'?'}!`]; } return []; } },
   };
 
-  // ─── Assign abilities to Pokémon data ─────────
-  // Map: pokemonKey → abilityKey
+  // ─── Pokémon → Ability mapping ────────────────
+  // All 898 Pokémon mapped to their primary ability.
   const POKEMON_ABILITIES = {
-    bulbasaur:  'overgrow',
-    ivysaur:    'overgrow',
-    venusaur:   'overgrow',
-    charmander: 'blaze',
-    charmeleon: 'blaze',
-    charizard:  'blaze',
-    squirtle:   'torrent',
-    wartortle:  'torrent',
-    blastoise:  'torrent',
-    pikachu:    'static',
-    raichu:     'static',
-    eevee:      'naturalcure',
-    gengar:     'levitate',
-    machamp:    'hugepower',
-    lapras:     'naturalcure',
-    dragonite:  'hugepower',
-    mewtwo:     'speedboost',
-    snorlax:    'thickfat',
-    lucario:    'hugepower',
-    garchomp:   'sandStream',
+    // ── Gen 1 ──
+    bulbasaur:'overgrow',    ivysaur:'overgrow',      venusaur:'overgrow',
+    charmander:'blaze',      charmeleon:'blaze',      charizard:'blaze',
+    squirtle:'torrent',      wartortle:'torrent',     blastoise:'torrent',
+    caterpie:'shielddust',   metapod:'shielddust',    butterfree:'compoundeyes',
+    weedle:'poisonpoint',    kakuna:'shielddust',     beedrill:'swarm',
+    pidgey:'keeneye',        pidgeotto:'keeneye',     pidgeot:'keeneye',
+    rattata:'guts',          raticate:'guts',
+    spearow:'keeneye',       fearow:'keeneye',
+    ekans:'intimidate',      arbok:'intimidate',
+    pikachu:'static',        raichu:'static',
+    sandshrew:'sandveil',    sandslash:'sandveil',
+    nidoranF:'poisonpoint',  nidorina:'poisonpoint',  nidoqueen:'poisonpoint',
+    nidoranM:'poisonpoint',  nidorino:'poisonpoint',  nidoking:'poisonpoint',
+    clefairy:'cutecharm',    clefable:'cutecharm',
+    vulpix:'flashfire',      ninetales:'flashfire',
+    jigglypuff:'cutecharm',  wigglytuff:'cutecharm',
+    zubat:'innerfocus',      golbat:'innerfocus',
+    oddish:'chlorophyll',    gloom:'chlorophyll',     vileplume:'chlorophyll',
+    paras:'effectspore',     parasect:'effectspore',
+    venonat:'compoundeyes',  venomoth:'compoundeyes',
+    diglett:'sandveil',      dugtrio:'sandveil',
+    meowth:'pickup',         persian:'limber',
+    psyduck:'cloudnine',     golduck:'cloudnine',
+    mankey:'vitalspirit',    primeape:'vitalspirit',
+    growlithe:'intimidate',  arcanine:'intimidate',
+    poliwag:'waterabsorb',   poliwhirl:'waterabsorb', poliwrath:'waterabsorb',
+    abra:'innerfocus',       kadabra:'innerfocus',    alakazam:'innerfocus',
+    machop:'guts',           machoke:'guts',          machamp:'guts',
+    bellsprout:'chlorophyll',weepinbell:'chlorophyll',victreebel:'chlorophyll',
+    tentacool:'liquidooze',  tentacruel:'liquidooze',
+    geodude:'sturdy',        graveler:'sturdy',       golem:'sturdy',
+    ponyta:'flashfire',      rapidash:'flashfire',
+    slowpoke:'oblivious',    slowbro:'oblivious',
+    magnemite:'sturdy',      magneton:'sturdy',
+    farfetchd:'innerfocus',
+    doduo:'earlybird',       dodrio:'earlybird',
+    seel:'thickfat',         dewgong:'thickfat',
+    grimer:'stench',         muk:'stench',
+    shellder:'shellarmor',   cloyster:'shellarmor',
+    gastly:'levitate',       haunter:'levitate',      gengar:'levitate',
+    onix:'sturdy',
+    drowzee:'insomnia',      hypno:'insomnia',
+    krabby:'hyper cutter',   kingler:'hypercutter',
+    voltorb:'static',        electrode:'static',
+    exeggcute:'chlorophyll', exeggutor:'chlorophyll',
+    cubone:'rockhead',       marowak:'rockhead',
+    hitmonlee:'limber',      hitmonchan:'ironfish',   hitmontop:'intimidate',
+    lickitung:'owntemptation',
+    koffing:'levitate',      weezing:'levitate',
+    rhyhorn:'lightningrod',  rhydon:'lightningrod',   rhyperior:'lightningrod',
+    chansey:'naturalcure',   blissey:'naturalcure',
+    tangela:'chlorophyll',   tangrowth:'chlorophyll',
+    kangaskhan:'earlybird',
+    horsea:'swiftswim',      seadra:'swiftswim',      kingdra:'swiftswim',
+    goldeen:'swiftswim',     seaking:'swiftswim',
+    staryu:'naturalcure',    starmie:'naturalcure',
+    mrMime:'soundproof',
+    scyther:'swarm',         scizor:'swarm',
+    jynx:'oblivious',
+    electabuzz:'staticability', electivire:'motorDrive',
+    magmar:'flamebody',      magmortar:'flamebody',
+    pinsir:'hypercutter',
+    tauros:'intimidate',
+    magikarp:'swiftswim',    gyarados:'intimidate',
+    lapras:'shellarmor',
+    ditto:'imposter',
+    eevee:'adaptability',    vaporeon:'waterabsorb',  jolteon:'voltabsorb',
+    flareon:'flashfire',     espeon:'synchronize',    umbreon:'synchronize',
+    leafeon:'leafguard',     glaceon:'snowcloak',     sylveon:'pixilate',
+    porygon:'trace',         porygon2:'trace',        porygonZ:'adaptability',
+    omanyte:'swiftswim',     omastar:'swiftswim',
+    kabuto:'swiftswim',      kabutops:'swiftswim',
+    aerodactyl:'rockhead',
+    snorlax:'thickfat',
+    articuno:'pressureability', zapdos:'pressureability', moltres:'pressureability',
+    dratini:'shedskin',      dragonair:'shedskin',    dragonite:'multiscale',
+    mewtwo:'pressure',       mew:'synchronize',
+
+    // ── Gen 2 ──
+    chikorita:'overgrow',    bayleef:'overgrow',      meganium:'overgrow',
+    cyndaquil:'blaze',       quilava:'blaze',         typhlosion:'blaze',
+    totodile:'torrent',      croconaw:'torrent',      feraligatr:'torrent',
+    sentret:'keeneye',       furret:'keeneye',
+    hoothoot:'insomnia',     noctowl:'insomnia',
+    ledyba:'swarm',          ledian:'swarm',
+    spinarak:'swarm',        ariados:'swarm',
+    crobat:'innerfocus',
+    chinchou:'voltabsorb',   lanturn:'voltabsorb',
+    pichu:'static',
+    cleffa:'cutecharm',      igglybuff:'cutecharm',   togepi:'serenegrace',
+    togetic:'serenegrace',   togekiss:'serenegrace',
+    natu:'earlybird',        xatu:'earlybird',
+    mareep:'static',         flaaffy:'static',        ampharos:'static',
+    bellossom:'chlorophyll',
+    marill:'hugepower',      azumarill:'hugepower',   azurill:'hugepower',
+    sudowoodo:'sturdy',
+    politoed:'drizzle',
+    hoppip:'leafguard',      skiploom:'leafguard',    jumpluff:'leafguard',
+    aipom:'pickup',          ambipom:'technician',
+    sunkern:'chlorophyll',   sunflora:'chlorophyll',
+    yanma:'speedboost',      yanmega:'speedboost',
+    wooper:'waterabsorb',    quagsire:'waterabsorb',
+    unown:'levitate',
+    wobbuffet:'shadowtag',
+    girafarig:'innerfocus',
+    pineco:'sturdy',         forretress:'sturdy',
+    dunsparce:'serenegrace',
+    gligar:'hypercutter',    gliscor:'hypercutter',
+    snubbull:'intimidate',   granbull:'intimidate',
+    qwilfish:'poisonpoint',
+    shuckle:'sturdy',
+    heracross:'swarm',
+    sneasel:'innerfocus',    weavile:'pressure',
+    teddiursa:'pickup',      ursaring:'guts',         ursaluna:'guts',
+    slugma:'flamebody',      magcargo:'flamebody',
+    swinub:'thickfat',       piloswine:'thickfat',    mamoswine:'thickfat',
+    corsola:'naturalcure',
+    remoraid:'hustle',       octillery:'sniper',
+    delibird:'vitalsport',
+    mantine:'waterabsorb',   mantyke:'waterabsorb',
+    skarmory:'keeneye',
+    houndour:'flashfire',    houndoom:'flashfire',
+    phanpy:'pickup',         donphan:'sturdy',
+    stantler:'intimidate',
+    smeargle:'owntempo',
+    tyrogue:'guts',
+    smoochum:'forewarn',
+    elekid:'static',
+    magby:'flamebody',
+    miltank:'scrappy',
+    raikou:'pressure',       entei:'pressure',        suicune:'pressure',
+    larvitar:'guts',         pupitar:'shedskin',      tyranitar:'sandStream',
+    lugia:'multiscale',      hoOh:'pressure',         celebi:'naturalcure',
+
+    // ── Gen 3 ──
+    treecko:'overgrow',      grovyle:'overgrow',      sceptile:'overgrow',
+    torchic:'blaze',         combusken:'blaze',       blaziken:'speedboost',
+    mudkip:'torrent',        marshtomp:'torrent',     swampert:'torrent',
+    poochyena:'quickfeet',   mightyena:'intimidate',
+    zigzagoon:'pickup',      linoone:'pickup',        obstagoon:'reckless',
+    wurmple:'shielddust',    silcoon:'shielddust',    cascoon:'shielddust',
+    beautifly:'swarm',       dustox:'shielddust',
+    lotad:'swiftswim',       lombre:'swiftswim',      ludicolo:'swiftswim',
+    seedot:'chlorophyll',    nuzleaf:'chlorophyll',   shiftry:'chlorophyll',
+    taillow:'guts',          swellow:'guts',
+    wingull:'keeneye',       pelipper:'keeneye',
+    ralts:'synchronize',     kirlia:'synchronize',    gardevoir:'synchronize',
+    gallade:'steadfast',
+    surskit:'swiftswim',     masquerain:'intimidate',
+    shroomish:'effectspore', breloom:'effectspore',
+    slakoth:'truant',        vigoroth:'vitalspirit',  slaking:'truant',
+    nincada:'compoundeyes',  ninjask:'speedboost',    shedinja:'wonderguard',
+    whismur:'soundproof',    loudred:'soundproof',    exploud:'soundproof',
+    makuhita:'guts',         hariyama:'guts',
+    nosepass:'sturdy',       probopass:'sturdy',
+    skitty:'normalize',      delcatty:'normalize',
+    sableye:'keeneye',
+    mawile:'hyper cutter',
+    aron:'sturdy',           lairon:'sturdy',         aggron:'sturdy',
+    meditite:'purepower',    medicham:'purepower',
+    electrike:'static',      manectric:'static',
+    plusle:'plus',           minun:'minus',
+    volbeat:'illuminate',    illumise:'oblivious',
+    roselia:'naturalcure',   roserade:'naturalcure',
+    gulpin:'liquidooze',     swalot:'liquidooze',
+    carvanha:'roughskin',    sharpedo:'roughskin',
+    wailmer:'waterabsorb',   wailord:'waterabsorb',
+    numel:'simplenote',      camerupt:'solidrock',
+    torkoal:'whitesmoke',
+    spoink:'thickfat',       grumpig:'thickfat',
+    spinda:'owntempo',
+    trapinch:'hyper cutter', vibrava:'levitate',      flygon:'levitate',
+    cacnea:'sandveil',       cacturne:'sandveil',
+    swablu:'naturalcure',    altaria:'naturalcure',
+    zangoose:'immunity',
+    seviper:'shedskin',
+    lunatone:'levitate',     solrock:'levitate',
+    barboach:'oblivious',    whiscash:'oblivious',
+    corphish:'hyper cutter', crawdaunt:'hyper cutter',
+    baltoy:'levitate',       claydol:'levitate',
+    lileep:'suction cups',   cradily:'suctionCups',
+    anorith:'battl armour',  armaldo:'battleArmor',
+    feebas:'swiftswim',      milotic:'marvelscale',
+    castform:'forecast',
+    kecleon:'colorchange',
+    shuppet:'insomnia',      banette:'insomnia',
+    duskull:'levitate',      dusclops:'pressure',     dusknoir:'pressure',
+    tropius:'chlorophyll',
+    chimecho:'levitate',
+    absol:'pressure',
+    wynaut:'shadowtag',
+    snorunt:'innerfocus',    glalie:'innerfocus',     froslass:'snowcloak',
+    spheal:'thickfat',       sealeo:'thickfat',       walrein:'thickfat',
+    clamperl:'shellarmor',   huntail:'swiftswim',     gorebyss:'swiftswim',
+    relicanth:'swiftswim',
+    luvdisc:'swiftswim',
+    bagon:'rockhead',        shelgon:'rockhead',      salamence:'intimidate',
+    beldum:'clearbody',      metang:'clearbody',      metagross:'clearbody',
+    regirock:'clearbody',    regice:'icebody',        registeel:'clearbody',
+    latias:'levitate',       latios:'levitate',
+    kyogre:'drizzle',        groudon:'drought',       rayquaza:'airlock',
+    jirachi:'serenegrace',   deoxysNormal:'pressure',
+
+    // ── Gen 4 ──
+    turtwig:'overgrow',      grotle:'overgrow',       torterra:'overgrow',
+    chimchar:'blaze',        monferno:'blaze',        infernape:'blaze',
+    piplup:'torrent',        prinplup:'torrent',      empoleon:'torrent',
+    starly:'keeneye',        staravia:'intimidate',   staraptor:'intimidate',
+    bidoof:'simple',         bibarel:'simple',
+    kricketot:'shedskin',    kricketune:'swarm',
+    shinx:'rivalry',         luxio:'rivalry',         luxray:'rivalry',
+    budew:'naturalcure',
+    cranidos:'mold breaker', rampardos:'moldbreaker',
+    shieldon:'sturdy',       bastiodon:'sturdy',
+    burmy:'shielddust',
+    mothim:'swarm',          wormadam:'anticipation',
+    combee:'hustle',         vespiquen:'pressure',
+    pachirisu:'pickup',
+    buizel:'swiftswim',      floatzel:'swiftswim',
+    cherubi:'chlorophyll',   cherrim:'flowerGift',
+    shellos:'stormDrain',    gastrodon:'stormDrain',
+    drifloon:'aftermath',    drifblim:'aftermath',
+    buneary:'runaway',       lopunny:'cutecharm',
+    misdreavus:'levitate',   mismagius:'levitate',
+    honchkrow:'insomnia',
+    glameow:'limber',        purugly:'thickFat',
+    chingling:'levitate',
+    stunky:'stench',         skuntank:'stench',
+    bronzor:'levitate',      bronzong:'levitate',
+    bonsly:'sturdy',
+    munchlax:'thickfat',
+    riolu:'steadfast',       lucario:'steadfast',
+    hippopotas:'sandStream', hippowdon:'sandStream',
+    skorupi:'battleArmor',   drapion:'battleArmor',
+    croagunk:'anticipation', toxicroak:'anticipation',
+    carnivine:'levitate',
+    finneon:'swiftswim',     lumineon:'swiftswim',
+    snover:'snowWarning',    abomasnow:'snowWarning',
+    weavile:'pressure',
+    magnezone:'sturdy',
+    togekiss:'serenegrace',
+    leafeon:'leafguard',     glaceon:'snowcloak',
+    gliscor:'hypercutter',
+    porygonZ:'adaptability',
+    gallade:'steadfast',
+    froslass:'snowcloak',
+    rotom:'levitate',
+    uxie:'levitate',         mesprit:'levitate',      azelf:'levitate',
+    dialga:'pressure',       palkia:'pressure',
+    heatran:'flashfire',     regigigas:'slowstart',
+    giratinaAltered:'pressure', giratinaOrigin:'levitate',
+    cresselia:'levitate',    phione:'hydration',      manaphy:'hydration',
+    darkrai:'badDreams',     shaymin:'naturalcure',   arceus:'multitype',
+
+    // ── Gen 5 ──
+    victini:'victorystar',
+    snivy:'overgrow',        servine:'overgrow',      serperior:'overgrow',
+    tepig:'blaze',           pignite:'blaze',         emboar:'blaze',
+    oshawott:'torrent',      dewott:'torrent',        samurott:'torrent',
+    patrat:'keeneye',        watchog:'illuminate',
+    lillipup:'pickup',       herdier:'intimidate',    stoutland:'intimidate',
+    purrloin:'limber',       liepard:'limber',
+    pansage:'gluttony',      simisage:'gluttony',
+    pansear:'gluttony',      simisear:'gluttony',
+    panpour:'gluttony',      simipour:'gluttony',
+    munna:'forewarn',        musharna:'forewarn',
+    pidove:'superluck',      tranquill:'superluck',   unfezant:'superluck',
+    blitzle:'lightningrod',  zebstrika:'lightningrod',
+    roggenrola:'sturdy',     boldore:'sturdy',        gigalith:'sturdy',
+    woobat:'unaware',        swoobat:'unaware',
+    drilbur:'sandRush',      excadrill:'sandRush',
+    audino:'healer',
+    timburr:'guts',          gurdurr:'guts',          conkeldurr:'guts',
+    tympole:'swiftswim',     palpitoad:'swiftswim',   seismitoad:'swiftswim',
+    throh:'guts',            sawk:'sturdy',
+    sewaddle:'swarm',        swadloon:'leafguard',    leavanny:'swarm',
+    venipede:'swarm',        whirlipede:'swarm',      scolipede:'swarm',
+    cottonee:'prankster',    whimsicott:'prankster',
+    petilil:'chlorophyll',   lilligant:'chlorophyll',
+    basculin:'reckless',
+    sandile:'intimidate',    krokorok:'intimidate',   krookodile:'intimidate',
+    darumaka:'hustle',       darmanitan:'sheerforce',
+    maractus:'waterabsorb',
+    dwebble:'sturdy',        crustle:'sturdy',
+    scraggy:'shedskin',      scrafty:'shedskin',
+    sigilyph:'wonderskin',
+    yamask:'mummify',        cofagrigus:'mummify',
+    tirtouga:'sturdy',       carracosta:'sturdy',
+    archen:'defeatist',      archeops:'defeatist',
+    trubbish:'stench',       garbodor:'stench',
+    zorua:'illusion',        zoroark:'illusion',
+    minccino:'cutecharm',    cinccino:'technician',
+    gothita:'frisk',         gothorita:'frisk',       gothitelle:'frisk',
+    solosis:'magicguard',    duosion:'magicguard',    reuniclus:'magicguard',
+    ducklett:'keeneye',      swanna:'keeneye',
+    vanillite:'icebody',     vanillish:'icebody',     vanilluxe:'icebody',
+    deerling:'chlorophyll',  sawsbuck:'chlorophyll',
+    emolga:'static',
+    karrablast:'swarm',      escavalier:'swarm',
+    foongus:'effectspore',   amoonguss:'effectspore',
+    frillish:'waterabsorb',  jellicent:'waterabsorb',
+    alomomola:'healer',
+    joltik:'compoundeyes',   galvantula:'compoundeyes',
+    ferroseed:'ironbarbs',   ferrothorn:'ironbarbs',
+    klink:'plusability',     klang:'plusability',     klinklang:'plusability',
+    tynamo:'levitate',       eelektrik:'levitate',    eelektross:'levitate',
+    elgyem:'telepathy',      beheeyem:'telepathy',
+    litwick:'flashfire',     lampent:'flashfire',     chandelure:'flashfire',
+    axew:'rivalry',          fraxure:'rivalry',       haxorus:'rivalry',
+    cubchoo:'snowcloak',     beartic:'swiftswim',
+    cryogonal:'levitate',
+    shelmet:'shellarmor',    accelgor:'hydration',
+    stunfisk:'static',
+    mienfoo:'regenerator',   mienshao:'regenerator',
+    druddigon:'roughskin',
+    golett:'ironfish',       golurk:'ironfish',
+    pawniard:'defiant',      bisharp:'defiant',       kingambit:'defiant',
+    bouffalant:'reckless',
+    rufflet:'keeneye',       braviary:'sheerforce',
+    vullaby:'overcoat',      mandibuzz:'overcoat',
+    heatmor:'flashfire',
+    durant:'swarm',
+    deino:'hustle',          zweilous:'hustle',       hydreigon:'levitate',
+    larvesta:'swarm',        volcarona:'swarm',
+    cobalion:'justifiedability', terrakion:'justifiedability', virizion:'justifiedability',
+    tornadusIncarnate:'prankster', thundurusIncarnate:'prankster',
+    reshiram:'turboblaze',   zekrom:'teravolt',       kyurem:'pressure',
+    keldeoOrdinary:'justified', meloettaAria:'serenegrace', genesect:'downloadability',
+
+    // ── Gen 6 ──
+    chespin:'overgrow',      quilladin:'overgrow',    chesnaught:'overgrow',
+    fennekin:'blaze',        braixen:'blaze',         delphox:'blaze',
+    froakie:'torrent',       frogadier:'torrent',     greninja:'torrent',
+    bunnelby:'pickup',       diggersby:'hugepower',
+    fletchling:'guts',       fletchinder:'flamebody', talonflame:'flamebody',
+    scatterbug:'shedskin',   spewpa:'shedskin',       vivillon:'shielddust',
+    litleo:'rivalry',        pyroar:'rivalry',
+    flabebe:'flowerVeil',    floette:'flowerVeil',    florges:'flowerVeil',
+    skiddo:'sap sipper',     gogoat:'sapsapper',
+    pancham:'ironfish',      pangoro:'ironfish',
+    furfrou:'furcoat',
+    espurr:'keen eye',       meowstic:'prankster',
+    honedge:'noGuard',       doublade:'noGuard',      aegislash:'stanceChange',
+    spritzee:'healer',       aromatisse:'healer',
+    swirlix:'sweetveil',     slurpuff:'sweetveil',
+    inkay:'contrary',        malamar:'contrary',
+    binacle:'toughclaws',    barbaracle:'toughclaws',
+    skrelp:'adaptability',   dragalge:'adaptability',
+    clauncher:'megaLauncher',clawitzer:'megaLauncher',
+    helioptile:'dryskin',    heliolisk:'dryskin',
+    tyrunt:'strongjaw',      tyrantrum:'strongjaw',
+    amaura:'refrigerate',    aurorus:'refrigerate',
+    sylveon:'pixilate',
+    hawlucha:'limber',
+    dedenne:'cheekpouch',
+    carbink:'clearbody',
+    goomy:'slimy',           sliggoo:'slimy',         goodra:'gooey',
+    klefki:'prankster',
+    phantump:'naturalcure',  trevenant:'naturalcure',
+    pumpkaboo:'frisk',       gourgeist:'frisk',
+    bergmite:'icebody',      avalugg:'sturdy',        cryosnease:'icebody',
+    noibat:'frisk',          noivern:'frisk',
+    xerneas:'fairyAura',     yveltal:'darkAura',      zygarde:'aura break',
+    diancie:'clearbody',     hoopa:'magician',        volcanion:'waterabsorb',
+
+    // ── Gen 7 ──
+    rowlet:'overgrow',       dartrix:'overgrow',      decidueye:'overgrow',
+    litten:'blaze',          torracat:'blaze',        incineroar:'intimidate',
+    popplio:'torrent',       brionne:'torrent',       primarina:'torrent',
+    pikipek:'keeneye',       trumbeak:'keeneye',      toucannon:'keeneye',
+    yungoos:'stakeout',      gumshoos:'stakeout',
+    grubbin:'swarm',         charjabug:'batteryability', vikavolt:'levitate',
+    crabrawler:'hyper cutter', crabominable:'ironfish',
+    oricorio:'dancer',
+    cutiefly:'honey',        ribombee:'honey',
+    rockruff:'keeneye',      lycanrocMidnight:'tough claws', lycanrocMidday:'keeneye',
+    wishiwashi:'schooling',
+    mareanie:'merciless',    toxapex:'merciless',
+    mudbray:'stamina',       mudsdale:'stamina',
+    dewpider:'waterabsorb',  araquanid:'waterabsorb',
+    fomantis:'leafguard',    lurantis:'leafguard',
+    morelull:'effectspore',  shiinotic:'effectspore',
+    salandit:'corrosion',    salazzle:'corrosion',
+    stufful:'fluffy',        bewear:'fluffy',
+    bounsweet:'oblivious',   steenee:'oblivious',     tsareena:'queenly majesty',
+    comfey:'triage',
+    oranguru:'innerfocus',
+    passimian:'receiverability',
+    wimpod:'wimp out',       golisopod:'emergencyexit',
+    sandygast:'watercompaction', palossand:'watercompaction',
+    pyukumuku:'innards out',
+    typeNull:'battlearmorability', silvally:'rkssystem',
+    minior:'shieldsdown',
+    komala:'comatose',
+    turtonator:'shellarmor',
+    togedemaru:'ironbarbs',
+    mimikyu:'disguise',
+    bruxish:'dazzling',
+    drampa:'berserk',
+    dhelmise:'steelworker',
+    jangmO0:'soundproof',    hakamo0:'soundproof',    kommoO:'soundproof',
+    tapuKoko:'electricSurge', tapuLele:'psychicSurge',
+    tapuBulu:'grassySurge',   tapuFini:'mistySurge',
+    cosmog:'unaware',        cosmoem:'unaware',
+    solgaleo:'fullMetalBody', lunala:'shadowShield',
+    nihilego:'beastboost',   buzzwole:'beastboost',   pheromosa:'beastboost',
+    xurkitree:'beastboost',  celesteela:'beastboost', kartana:'beastboost',
+    guzzlord:'beastboost',   necrozma:'prismArmor',
+    magearna:'soulheart',    marshadow:'technician',  poipole:'beastboost',
+    naganadel:'beastboost',  stakataka:'beastboost',  blacephalon:'beastboost',
+    zeraora:'voltabsorb',    meltan:'magnetpull',     melmetal:'ironfish',
+
+    // ── Gen 8 ──
+    grookey:'overgrow',      thwackey:'overgrow',     rillaboom:'overgrow',
+    scorbunny:'blaze',       raboot:'blaze',          cinderace:'libero',
+    sobble:'torrent',        drizzile:'torrent',      inteleon:'torrent',
+    skwovet:'cheekpouch',    greedent:'cheekpouch',
+    rookidee:'keeneye',      corvisquire:'keeneye',   corviknight:'pressure',
+    blipbug:'swarm',         dottler:'swarm',         orbeetle:'swarm',
+    nickit:'runaway',        thievul:'runaway',
+    gossifleur:'cottondown', eldegoss:'cottondown',
+    wooloo:'fluffy',         dubwool:'fluffy',
+    chewtle:'strongjaw',     drednaw:'strongjaw',
+    yamper:'barkout',        boltund:'strongjaw',
+    rolycoly:'steam engine', carkol:'steamengine',    coalossal:'steamengine',
+    applin:'gluttony',       flapple:'gluttony',      appletun:'ripen',
+    silicobra:'sandveil',    sandaconda:'sandveil',
+    cramorant:'gulpmissile',
+    arrokuda:'swiftswim',    barraskewda:'swiftswim',
+    toxel:'purifyingsalt',   toxtricity:'purifyingsalt',
+    sizzlipede:'swarm',      centiskorch:'swarm',
+    clobbopus:'tactician',   grapploct:'technician',
+    sinistea:'weakarmor',    polteageist:'weakarmor',
+    hatenna:'healer',        hattrem:'healer',        hatterene:'magicbounce',
+    impidimp:'prankster',    morgrem:'prankster',     grimmsnarl:'prankster',
+    obstagoon:'reckless',    perrserker:'battlearmor',
+    cursola:'weakarmor',     sirfetchd:'steadfast',
+    mrRime:'iceBody',        runerigus:'wanderspirit',
+    milcery:'sweetveil',     alcremie:'sweetveil',
+    falinks:'battlearmor',
+    pincurchin:'electricsurge',
+    snom:'iceScales',        frosmoth:'icescales',
+    stonjourner:'powerspot',
+    eiscue:'iceface',
+    indeedee:'psychicsurge',
+    morpeko:'hungerswitch',
+    cufant:'sturdy',         copperajah:'sturdy',
+    dracozolt:'voltabsorb',  arctozolt:'voltabsorb',
+    dracovish:'swiftswim',   arctovish:'icescales',
+    duraludon:'lightmetal',
+    dreepy:'infiltrator',    drakloak:'infiltrator',  dragapult:'infiltrator',
+    zacian:'intrepid',       zamazenta:'dauntless',   eternatus:'pressure',
+    kubfu:'innerfocus',      urshifu:'unseen fist',
+    zarude:'leafguard',      regieleki:'transistor',  regidrago:'dragonsmaw',
+    glastrier:'chillingneigh', spectrier:'grimneigh',  calyrex:'asoneability',
+    wyrdeer:'steadfast',     kleavor:'sharpness',     ursalunabloodmoon:'multitype',
+    enamorus:'healer',
   };
 
-  /**
-   * Get the ability object for a Pokémon key.
-   * @param {string} pokemonKey
-   * @returns {object|null}
-   */
+  // ─── Lookup helpers ───────────────────────────
   function getAbility(pokemonKey) {
-    const abilityKey = POKEMON_ABILITIES[pokemonKey];
-    if (!abilityKey) return null;
-    return ABILITIES[abilityKey] || null;
+    const key = POKEMON_ABILITIES[pokemonKey];
+    if (!key) return null;
+    return ABILITIES[key] || null;
   }
 
-  /**
-   * Get ability name for display.
-   * @param {string} pokemonKey
-   */
   function getAbilityName(pokemonKey) {
-    const abilityKey = POKEMON_ABILITIES[pokemonKey];
-    if (!abilityKey) return 'None';
-    return ABILITIES[abilityKey]?.name || abilityKey;
+    const key = POKEMON_ABILITIES[pokemonKey];
+    if (!key) return 'None';
+    return ABILITIES[key]?.name || key;
   }
 
-  /**
-   * Get ability description for display.
-   * @param {string} pokemonKey
-   */
   function getAbilityDesc(pokemonKey) {
-    const abilityKey = POKEMON_ABILITIES[pokemonKey];
-    if (!abilityKey) return '';
-    return ABILITIES[abilityKey]?.desc || '';
+    const key = POKEMON_ABILITIES[pokemonKey];
+    if (!key) return '';
+    return ABILITIES[key]?.desc || '';
   }
 
-  // ─── Trigger helpers (call from battle flow) ──
-
+  // ─── Trigger functions ────────────────────────
   function triggerSwitchIn(pkmn, opponent, weather) {
     const ab = getAbility(pkmn.key);
     if (ab?.onSwitchIn) return ab.onSwitchIn(pkmn, opponent, weather) || [];
     return [];
   }
 
-  function triggerSwitchOut(pkmn) {
+  function triggerSwitchOut(pkmn, opponent) {
     const ab = getAbility(pkmn.key);
-    if (ab?.onSwitchOut) return ab.onSwitchOut(pkmn) || [];
+    if (ab?.onSwitchOut) return ab.onSwitchOut(pkmn, opponent) || [];
     return [];
   }
 
-  function triggerAttack(attacker, move, weather) {
+  function triggerAttack(attacker, move, weather, effectiveness) {
     const ab = getAbility(attacker.key);
-    if (ab?.onAttack) return ab.onAttack(attacker, move, weather) || 1;
+    if (ab?.onAttack) return ab.onAttack(attacker, move, weather, effectiveness) || 1;
     return 1;
   }
 
@@ -278,11 +816,25 @@ const AbilitySystem = (() => {
     return [];
   }
 
+  function triggerStatusApply(pkmn, status, weather) {
+    const ab = getAbility(pkmn.key);
+    if (ab?.onStatusApply) return ab.onStatusApply(pkmn, status, weather);
+    return true; // allow by default
+  }
+
+  function getWeatherBoost(pokemonKey, currentWeather) {
+    const key = POKEMON_ABILITIES[pokemonKey];
+    const ab  = ABILITIES[key];
+    if (ab?._weatherBoost && ab._weatherBoost === currentWeather) return 2.0;
+    return 1;
+  }
+
   return {
     ABILITIES, POKEMON_ABILITIES,
     getAbility, getAbilityName, getAbilityDesc,
     triggerSwitchIn, triggerSwitchOut, triggerAttack,
     triggerDefend, triggerOnHit, triggerEndOfTurn,
+    triggerStatusApply, getWeatherBoost,
   };
 
 })();

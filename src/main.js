@@ -18,12 +18,24 @@ window.addEventListener('DOMContentLoaded', () => {
   // Init subsystems
   TeamBuilder.init();
   Tower.init();
+  if (typeof StoryMode !== 'undefined') StoryMode.init();
   Screen.show('screen-menu');
 
   // Sound initialises on first click (browser AudioContext policy)
   document.addEventListener('click', () => SoundSystem.init(), { once: true });
 
   console.log('🎮 PokéArena loaded! Save version:', SaveSystem.get().version);
+
+  // Show "Continue Story" button if a story run is active
+  if (typeof StorySave !== 'undefined' && StorySave.hasStarted()) {
+    const continueBtn = document.getElementById('menu-continue-btn');
+    const storyBtn    = document.getElementById('menu-story-btn');
+    if (continueBtn) continueBtn.classList.remove('hidden');
+    if (storyBtn)    storyBtn.classList.add('hidden');
+  }
+
+  // Init story screens so they're ready
+  if (typeof StarterSelect !== 'undefined') StarterSelect.init();
 });
 
 // ═══════════════════════════════════════════════════
@@ -39,6 +51,12 @@ const Battle = (() => {
   let isTowerMode  = false;
   let cpuTier      = 1;
   let busy         = false; // prevents double-clicks during animations
+
+  // ─── Story mode state ─────────────────────────
+  let _storyOnWin  = null;
+  let _storyOnLose = null;
+  let _storyNPC    = null;
+  let _isWild      = false;
 
   // ─── PvP state ────────────────────────────────
   let isPvP          = false;
@@ -60,6 +78,12 @@ const Battle = (() => {
     cpuTier      = opts.cpuTier || 1;
     busy         = false;
 
+    // Story Mode hooks
+    _storyOnWin  = opts.onWin  || null;
+    _storyOnLose = opts.onLose || null;
+    _storyNPC    = opts.storyNPC || null;
+    _isWild      = opts.isWild || false;
+
     // PvP setup
     isPvP        = opts.pvp       || false;
     pvpSlot      = opts.slot      ?? 0;
@@ -67,7 +91,7 @@ const Battle = (() => {
     pvpOnOppMove = opts.onOpponentMove || null;
 
     // Reset weather each battle
-    if (typeof Weather !== 'undefined') Weather.reset();
+    if (typeof Weather !== 'undefined') Weather.clear();
 
     // Attach default held items to all Pokémon
     if (typeof HeldItems !== 'undefined') {
@@ -78,8 +102,30 @@ const Battle = (() => {
     const hud = document.getElementById('tower-hud');
     if (hud) hud.classList.toggle('hidden', !isTowerMode);
 
+    // Story mode trainer sprite panel
+    const trainerPanel = document.getElementById('trainer-sprite-panel');
+    const trainerImg   = document.getElementById('trainer-battle-sprite');
+    const trainerName  = document.getElementById('trainer-battle-name');
+    if (trainerPanel) {
+      if (_storyNPC && !_isWild && typeof SpriteManager !== 'undefined') {
+        const spriteKey = _storyNPC.sprite || 'default';
+        const portrait  = SpriteManager.trainerPortrait(spriteKey);
+        SpriteManager.bindToElement(trainerImg, portrait, null, spriteKey);
+        if (trainerName) trainerName.textContent = _storyNPC.name || '';
+        trainerPanel.classList.remove('hidden');
+      } else {
+        trainerPanel.classList.add('hidden');
+        if (trainerImg)  trainerImg.src = '';
+        if (trainerName) trainerName.textContent = '';
+      }
+    }
+
     BattleUI.refresh();
     BattleUI.showActions();
+
+    // Ensure result overlay is hidden at battle start
+    const resultOverlayEl = document.getElementById('result-overlay');
+    if (resultOverlayEl) resultOverlayEl.classList.add('hidden');
 
     // Clear log for new battle
     if (typeof BattleLog !== 'undefined') {
@@ -95,9 +141,16 @@ const Battle = (() => {
       switchInMsgs.push(...AbilitySystem.triggerSwitchIn(getEnemy(), getPlayer(), Weather));
     }
 
+    // Start weather particles if weather was set by a switch-in ability
+    _refreshWeatherFX();
+
     if (switchInMsgs.length > 0) {
       BattleUI.setMessage(switchInMsgs[0]);
-      setTimeout(() => BattleUI.setMessage(`Go, ${getPlayer().name}!`), 1200);
+      // Queue each ability message as an ability toast
+      switchInMsgs.forEach((msg, i) => {
+        setTimeout(() => _showAbilityToast(msg), i * 800);
+      });
+      setTimeout(() => BattleUI.setMessage(`Go, ${getPlayer().name}!`), switchInMsgs.length * 800 + 400);
     } else {
       BattleUI.setMessage(`Go, ${getPlayer().name}!`);
     }
@@ -112,9 +165,9 @@ const Battle = (() => {
   }
 
   // ─── Wait for opponent's move over the network ─
-  // pvpOnOppMove is now PvP.waitForMove — a function that returns a Promise.
+  // pvpOnOppMove is PvP.waitForMove — returns Promise<{ moveId, seed }>
   function waitForOpponentMove() {
-    return pvpOnOppMove(); // returns Promise<moveId>
+    return pvpOnOppMove(); // returns Promise<{ moveId, seed }>
   }
 
   // ─── Process player move choice ───────────────
@@ -131,11 +184,14 @@ const Battle = (() => {
     let playerMove, enemyMove;
 
     if (isPvP && pvpSendMove && pvpOnOppMove) {
-      // ── PvP: exchange moves over the network ──
-      pvpSendMove(move.id);
+      // ── PvP: exchange moves + shared RNG seed ──
+      // Generate the seed for this turn on our side and send it with our move.
+      // Both clients will use this same seed so every dice roll is identical.
+      const turnSeed = BattleEngine.generateSeed();
+      pvpSendMove(move.id, turnSeed);
       BattleUI.setMessage('⏳ Waiting for opponent...');
 
-      const opponentMoveId = await waitForOpponentMove();
+      const { moveId: opponentMoveId, seed: opponentSeed } = await waitForOpponentMove();
 
       // Opponent fled mid-wait
       if (opponentMoveId === '__opponent_fled__') {
@@ -153,6 +209,10 @@ const Battle = (() => {
         playerMove = opponentMoveObj;
         enemyMove  = move;
       }
+
+      // Combine both seeds so neither player controls the outcome unilaterally
+      const combinedSeed = (turnSeed ^ opponentSeed) >>> 0;
+      BattleEngine.seedRng(combinedSeed);
     } else {
       // ── CPU / local battle ──
       playerMove = move;
@@ -163,6 +223,7 @@ const Battle = (() => {
 
     // Run the turn through the engine
     const events = BattleEngine.executeTurn(player, enemy, playerMove, enemyMove);
+    BattleEngine.resetRng(); // restore native Math.random for non-engine code
 
     // Play events sequentially
     await processEvents(events);
@@ -264,6 +325,23 @@ const Battle = (() => {
           for (const msg of event.messages) {
             BattleUI.setMessage(msg);
             BattleLog.logEffect(msg);
+
+            // Check if this message changed weather — refresh FX
+            const weatherKeywords = ['sunlight','raining','sandstorm','hailing','snowing','fog','Terrain','weather cleared','faded','stopped','subsided','lifted'];
+            if (weatherKeywords.some(w => msg.includes(w))) {
+              _refreshWeatherFX();
+              _showAbilityToast(msg, 'weather');
+            }
+
+            // Ability activation toast for non-weather ability messages
+            const abilityKeywords = ['Intimidate','Intimidated','Drizzle','Drought','Sand Stream','Snow Warning',
+              'Electric Surge','Psychic Surge','Misty Surge','Grassy Surge','Download','Pressure',
+              'Flash Fire','Water Absorb','Volt Absorb','Rough Skin','Iron Barbs','Flame Body',
+              'Static','Poison Point','Natural Cure','Regenerator','Speed Boost',
+              'Multiscale','Solid Rock','Wonder Guard','blocked'];
+            if (abilityKeywords.some(a => msg.includes(a))) {
+              _showAbilityToast(msg, 'ability');
+            }
 
             const statusTypes = ['burned','paralyzed','poisoned','frozen','asleep'];
             const player = getPlayer();
@@ -393,20 +471,24 @@ const Battle = (() => {
     let switchEnemyMove;
     if (isPvP && pvpOnOppMove) {
       // In PvP, the switch itself is the player's "action" for this turn.
-      // Send a special switch signal and wait for the opponent's move.
-      pvpSendMove && pvpSendMove('__switch__');
-      const opponentMoveId = await waitForOpponentMove();
+      // Send a special switch signal + our seed and wait for the opponent's move.
+      const turnSeed = BattleEngine.generateSeed();
+      pvpSendMove && pvpSendMove('__switch__', turnSeed);
+      const { moveId: opponentMoveId, seed: opponentSeed } = await waitForOpponentMove();
       if (opponentMoveId === '__opponent_fled__') {
         await opponentFled(null);
         return;
       }
       switchEnemyMove = getEnemy().moves.find(m => m.id === opponentMoveId)
         || getEnemy().moves[0];
+      const combinedSeed = (turnSeed ^ opponentSeed) >>> 0;
+      BattleEngine.seedRng(combinedSeed);
     } else {
       switchEnemyMove = CPU.chooseMove(getEnemy(), getPlayer(), cpuTier);
     }
     const switchDummy = { name:'(switching)', power:0, accuracy:100, pp:99, currentPP:99, priority:5, type:'normal', category:'status' };
     const events = BattleEngine.executeTurn(getPlayer(), getEnemy(), switchDummy, switchEnemyMove);
+    BattleEngine.resetRng();
     await processEvents(events);
 
     if (BattleEngine.isTeamDefeated(playerTeam)) {
@@ -442,11 +524,11 @@ const Battle = (() => {
       playerTeam.forEach((pkmn, i) => {
         if (BattleEngine.hasFainted(pkmn)) return;
 
-        // Sum XP from all defeated enemies
+        // Sum XP from all defeated enemies, passing player level for relative scaling
         let totalXP = 0;
         enemyTeam.forEach(enemy => {
           if (typeof XPSystem !== 'undefined') {
-            totalXP += XPSystem.calcReward(enemy, floorBonus);
+            totalXP += XPSystem.calcReward(enemy, floorBonus, pkmn.level);
           }
         });
 
@@ -509,6 +591,18 @@ const Battle = (() => {
     icon.textContent  = '🏆';
     title.textContent = 'Victory!';
 
+    // Story mode: bypass overlay and hand control back to overworld
+    if (_storyOnWin) {
+      const _tp2 = document.getElementById('trainer-sprite-panel');
+      if (_tp2) _tp2.classList.add('hidden');
+      const cb = _storyOnWin;
+      _storyOnWin  = null;
+      _storyOnLose = null;
+      busy = false;
+      cb();
+      return;
+    }
+
     if (isTowerMode) {
       const floor     = Tower.getCurrentFloor();
       const floorData = Tower.generateFloor(floor);
@@ -540,11 +634,27 @@ const Battle = (() => {
 
     icon.textContent  = '💀';
     title.textContent = 'Defeated!';
+
+    // Story mode: no overlay — let overworld handle the blackout
+    if (_storyOnLose) {
+      const _tp3 = document.getElementById('trainer-sprite-panel');
+      if (_tp3) _tp3.classList.add('hidden');
+      const cb = _storyOnLose;
+      _storyOnWin  = null;
+      _storyOnLose = null;
+      busy = false;
+      cb();
+      return;
+    }
+
     detail.textContent = isTowerMode
       ? `You reached Floor ${Tower.getCurrentFloor()}. Keep training!`
       : 'Better luck next time!';
 
-    if (isTowerMode) Tower.endRun();
+    if (isTowerMode) {
+      Tower.clearPendingEgg();
+      Tower.endRun();
+    }
 
     overlay.classList.remove('hidden');
     busy = false;
@@ -582,10 +692,35 @@ const Battle = (() => {
    */
   function playerFled() {
     if (isPvP) {
-      // Disconnecting from the socket triggers opponentDisconnected on their end
       if (typeof PvP !== 'undefined') PvP.disconnect();
     }
+    // Hide trainer sprite panel on exit
+    const _tp = document.getElementById('trainer-sprite-panel');
+    if (_tp) _tp.classList.add('hidden');
+
+    // Story mode: fleeing counts as a loss
+    if (_storyOnLose) {
+      const cb = _storyOnLose;
+      _storyOnWin  = null;
+      _storyOnLose = null;
+      cb();
+      return;
+    }
     Screen.show('screen-menu');
+  }
+
+  // Story mode callbacks (set by Battle.start opts)
+  _storyOnWin  = null;
+  _storyOnLose = null;
+  _storyNPC    = null;
+  _isWild      = false;
+
+  function isStoryBattle() { return _storyOnWin !== null || _storyOnLose !== null; }
+  function fireStoryWin()  {
+    const cb = _storyOnWin; _storyOnWin = null; _storyOnLose = null; if (cb) cb();
+  }
+  function fireStoryLose() {
+    const cb = _storyOnLose; _storyOnWin = null; _storyOnLose = null; if (cb) cb();
   }
 
   return {
@@ -596,11 +731,49 @@ const Battle = (() => {
     opponentFled,
     getPlayer,
     getEnemy,
+    isStoryBattle,
+    fireStoryWin,
+    fireStoryLose,
     get playerTeam() { return playerTeam; },
     get enemyTeam()  { return enemyTeam;  }
   };
 
 })();
+
+// ═══════════════════════════════════════════════════
+//  WEATHER FX + ABILITY TOAST
+// ═══════════════════════════════════════════════════
+
+/** Refresh weather particle canvas and arena class to match current weather. */
+function _refreshWeatherFX() {
+  if (typeof Weather === 'undefined') return;
+  // Weather.updateUI() is called internally by Weather.set/clear,
+  // but we may need to restart particles after a mid-battle weather change.
+  const canvas = document.getElementById('weather-particle-canvas');
+  if (canvas) {
+    Weather.stopParticles();
+    if (Weather.current() !== 'none') Weather.startParticles(canvas);
+  }
+}
+
+/** Show a small toast banner for an ability activation or weather change. */
+let _toastTimeout = null;
+function _showAbilityToast(msg, type = 'ability') {
+  let el = document.getElementById('ability-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'ability-toast';
+    document.getElementById('screen-battle')?.appendChild(el);
+  }
+  el.className = `ability-toast ability-toast-${type}`;
+  el.textContent = msg;
+  el.classList.add('ability-toast-show');
+
+  clearTimeout(_toastTimeout);
+  _toastTimeout = setTimeout(() => {
+    el.classList.remove('ability-toast-show');
+  }, 2200);
+}
 
 // ═══════════════════════════════════════════════════
 //  BATTLE UI — Renders and updates the battle screen
@@ -851,6 +1024,19 @@ const BattleUI = (() => {
     // Stop any leftover idles from a previous battle
     BattleAnimations.stopAllIdles();
 
+    // Clear all sub-menu grids so previous battle's fainted/items don't bleed through
+    const switchGrid = document.getElementById('switch-grid');
+    const movesGrid  = document.getElementById('moves-grid');
+    const bagList    = document.getElementById('bag-items-list');
+    const bagTarget  = document.getElementById('bag-target-grid');
+    if (switchGrid) switchGrid.innerHTML = '';
+    if (movesGrid)  movesGrid.innerHTML  = '';
+    if (bagList)    bagList.innerHTML    = '';
+    if (bagTarget)  bagTarget.innerHTML  = '';
+
+    // Ensure we start on the actions panel (not a leftover sub-menu)
+    showSection('actions');
+
     // Sprites
     playerSpriteEl.src = player.backSpriteUrl;
     enemySpriteEl.src  = enemy.spriteUrl;
@@ -1048,7 +1234,10 @@ function startBattle(mode) {
   const cpuPool  = ['charizard','blastoise','venusaur','pikachu','gengar','snorlax','lapras','machamp','dragonite'];
   const shuffled = cpuPool.sort(() => Math.random() - 0.5);
   const enemyTeam = shuffled.slice(0, Math.min(playerTeam.length, 3))
-    .map(k => createPokemonInstance(k, level))
+    .map(k => {
+      const isShiny = Math.random() < (1/512);  // 1/512 chance
+      return createPokemonInstance(k, level, { shiny: isShiny });
+    })
     .filter(Boolean);
 
   Screen.show('screen-battle');
@@ -1056,22 +1245,37 @@ function startBattle(mode) {
 }
 
 async function startTowerBattle() {
-  const keys = TeamBuilder.getTeam();
-  if (keys.length === 0) {
-    TeamBuilder.showToast('Add at least 1 Pokémon to your team first!');
-    Screen.show('screen-team');
+  const lead    = Tower.getSelectedLead();
+  const slotIdx = Tower.getSelectedSlotIdx();
+
+  if (!lead) {
+    TeamBuilder.showToast('Choose your lead Pokémon in the Tower menu!');
+    return;
+  }
+  if (slotIdx < 0) {
+    TeamBuilder.showToast('Choose a save slot first!');
     return;
   }
 
   SoundSystem.play('menuSelect');
-  Tower.startRun();
 
+  if (!Tower.getIsActive()) {
+    Tower.startRun(lead, slotIdx);
+  }
+
+  await _runTowerFloor();
+}
+
+/** Run one floor (used by both startTowerBattle and afterBattle advancement). */
+async function _runTowerFloor() {
   const floorNum  = Tower.getCurrentFloor();
   const floorData = Tower.generateFloor(floorNum);
-  const playerTeam= TeamBuilder.buildTowerTeam();
+  const playerTeam= Tower.buildRunParty();
   const cpuTier   = CPU.getTierForFloor(floorNum);
 
-  // Show animated floor transition, then start battle
+  // Stash the egg so we can award it after the battle
+  if (floorData.egg) Tower.setPendingEgg(floorData.egg);
+
   Screen.show('screen-battle');
   await FloorTransition.show(floorData, false);
 
@@ -1082,9 +1286,25 @@ async function afterBattle() {
   document.getElementById('result-overlay').classList.add('hidden');
   SoundSystem.play('menuSelect');
 
+  // Story mode win callback
+  if (Battle.isStoryBattle()) {
+    Battle.fireStoryWin();
+    return;
+  }
+
   if (Tower.getIsActive()) {
+    // Sync level-ups from battle back into the run party
+    Tower.syncPartyLevels(Battle.playerTeam || []);
     Tower.advanceFloor();
-    await startTowerBattle();
+
+    // If an egg was earned this floor, show the hatch overlay first
+    const egg = Tower.getPendingEgg();
+    if (egg) {
+      Tower.clearPendingEgg();
+      await EggHatch.show(egg);
+    }
+
+    await _runTowerFloor();
   } else {
     Screen.show('screen-menu');
   }
@@ -1092,24 +1312,10 @@ async function afterBattle() {
 
 /** Resume an interrupted tower run from saved floor */
 async function resumeTowerRun() {
-  const keys = TeamBuilder.getTeam();
-  if (keys.length === 0) {
-    TeamBuilder.showToast('Add at least 1 Pokémon to your team first!');
-    Screen.show('screen-team');
-    return;
-  }
-
+  const slotIdx = Tower.getSelectedSlotIdx();
   SoundSystem.play('menuSelect');
-  Tower.resumeRun();
-
-  const floorNum  = Tower.getCurrentFloor();
-  const floorData = Tower.generateFloor(floorNum);
-  const playerTeam= TeamBuilder.buildTowerTeam();
-  const cpuTier   = CPU.getTierForFloor(floorNum);
-
-  Screen.show('screen-battle');
-  await FloorTransition.show(floorData, false);
-  Battle.start(playerTeam, floorData.enemyTeam, { tower: true, cpuTier, floorData });
+  Tower.resumeRun(slotIdx >= 0 ? slotIdx : undefined);
+  await _runTowerFloor();
 }
 
 /** Pokédex type filter button handler */
@@ -1119,61 +1325,487 @@ function setDexType(type, btn) {
   Pokedex.setTypeFilter(type);
 }
 
-//Commands
-window.PokeCheats = (function () {
-  const SECRET = "letmein"; // change this to whatever you want
+// ═══════════════════════════════════════════════════
+//  CHEAT / DEBUG CONSOLE
+//  Usage: open browser console and type commands like:
+//
+//  PokeCheats.help()
+//  PokeCheats.unlock('letmein', 'mewtwo')
+//  PokeCheats.unlockAll('letmein')
+//  PokeCheats.setLevel('letmein', 'pikachu', 50)
+//  PokeCheats.giveItem('letmein', 'fullRestore', 10)
+//  PokeCheats.fillBag('letmein')
+//  PokeCheats.setFloor('letmein', 50)
+//  PokeCheats.addBadge('letmein', 0)
+//  PokeCheats.allBadges('letmein')
+//  PokeCheats.warpTo('letmein', 'pewterCity')
+//  PokeCheats.addToStoryParty('letmein', 'charizard')
+//  PokeCheats.setStoryPokemonLevel('letmein', 'charizard', 50)
+//  PokeCheats.healStoryParty('letmein')
+//  PokeCheats.addEgg('letmein', 'legendary')
+//  PokeCheats.setTowerFloor('letmein', 50)
+//  PokeCheats.status()
+//  PokeCheats.resetStory('letmein')
+//  PokeCheats.resetAll('letmein')
+// ═══════════════════════════════════════════════════
 
-  function check(code) {
+window.PokeCheats = (function () {
+
+  const SECRET = 'letmein';  // change to whatever you want
+
+  // ── Auth ──────────────────────────────────────
+  function _auth(code) {
     if (code !== SECRET) {
-      console.warn("Invalid cheat code");
+      _log('❌ Wrong code. Usage: PokeCheats.help()', 'error');
       return false;
     }
     return true;
   }
 
-  function unlockPokemon(code, pokemonId) {
-    if (!check(code)) return;
+  // ── Output ────────────────────────────────────
+  function _log(msg, type = 'info') {
+    const styles = {
+      info:    'color:#4e8cff',
+      success: 'color:#3ddc84',
+      warn:    'color:#f5c518',
+      error:   'color:#e8304a',
+    };
+    console.log('%c[PokeCheats] ' + msg, styles[type] || styles.info);
+  }
 
-    if (!POKEMON_DATA[pokemonId]) {
-      console.warn("Pokemon not found:", pokemonId);
-      return;
+  function _pkmn(key) {
+    return POKEMON_DATA[key] || POKEMON_DATA[key?.toLowerCase()];
+  }
+
+  // ════════════════════════════════════════════════
+  //  HELP
+  // ════════════════════════════════════════════════
+
+  function help() {
+    console.log('%cPokéArena Cheats — all commands need the secret code as first argument', 'color:#b06aff;font-weight:bold');
+    const cmds = [
+      ['help()',                                    'Show this help'],
+      ['status()',                                  'Show current game state (no code needed)'],
+      ['unlock(code, "pokemonKey")',                'Unlock a specific Pokémon'],
+      ['unlockAll(code)',                           'Unlock all 898 Pokémon'],
+      ['lock(code, "pokemonKey")',                  'Lock a specific Pokémon'],
+      ['lockAll(code)',                             'Lock all Pokémon (reset collection)'],
+      ['setLevel(code, "key", level)',              'Set quick-battle/tower level for a Pokémon'],
+      ['giveItem(code, "itemKey", amount)',         'Add items to bag (e.g. "fullRestore", "revive")'],
+      ['fillBag(code)',                             'Max out all bag items'],
+      ['clearBag(code)',                            'Empty all bag items'],
+      ['setTowerFloor(code, floor)',                'Jump to a tower floor (must be in a run)'],
+      ['addEgg(code, "rarity")',                    'Hatch an egg in the current tower run (common/uncommon/rare/epic/legendary)'],
+      ['addToStoryParty(code, "key")',              'Add a Pokémon to story party'],
+      ['setStoryPokemonLevel(code, "key", level)', 'Set story party member level'],
+      ['healStoryParty(code)',                      'Fully heal story party'],
+      ['addBadge(code, badgeIndex)',                'Earn a gym badge 0-7 (0=Brock, 7=Giovanni)'],
+      ['allBadges(code)',                           'Earn all 8 gym badges'],
+      ['warpTo(code, "mapId")',                     'Warp overworld to a map'],
+      ['resetStory(code)',                          'Reset story mode progress only'],
+      ['resetAll(code)',                            'Full game reset (destructive!)'],
+      ['listPokemon(filter)',                       'List Pokémon keys (optional: "unlocked"/"locked")'],
+      ['listMaps()',                                'List available map IDs'],
+      ['listItems()',                               'List all item keys and current counts'],
+    ];
+    cmds.forEach(([cmd, desc]) => {
+      console.log(`%c  PokeCheats.${cmd.padEnd(46)} %c${desc}`,
+        'color:#eef0ff', 'color:#7a80b0');
+    });
+    return '☝️ See above';
+  }
+
+  // ════════════════════════════════════════════════
+  //  STATUS (no auth needed)
+  // ════════════════════════════════════════════════
+
+  function status() {
+    const save     = SaveSystem.get();
+    const unlocked = SaveSystem.getUnlocked().length;
+    const total    = Object.keys(POKEMON_DATA).length;
+    const team     = SaveSystem.getTeam();
+    const inv      = SaveSystem.getInventory();
+
+    console.group('%c📊 PokéArena Status', 'color:#b06aff;font-weight:bold');
+
+    console.log('%cCollection', 'color:#f5c518;font-weight:bold');
+    console.log(`  Unlocked: ${unlocked}/${total}`);
+    console.log(`  Quick Battle Team: ${team.map(k => POKEMON_DATA[k]?.name || k).join(', ') || '(empty)'}`);
+
+    console.log('%cInventory', 'color:#f5c518;font-weight:bold');
+    Object.entries(inv).forEach(([k, v]) => console.log(`  ${k}: ${v}`));
+
+    console.log('%cTower', 'color:#f5c518;font-weight:bold');
+    console.log(`  Best Floor: ${SaveSystem.getBestFloor()}`);
+    console.log(`  Active Run: ${save.towerRun > 0 ? 'Floor ' + save.towerRun : 'None'}`);
+    const towerParty = save.towerParty || [];
+    if (towerParty.length) {
+      console.log(`  Run Party: ${towerParty.map(m => `${POKEMON_DATA[m.key]?.name||m.key} Lv${m.level}`).join(', ')}`);
     }
 
-    POKEMON_DATA[pokemonId].unlocked = true;
+    if (typeof StorySave !== 'undefined' && StorySave.hasStarted()) {
+      console.log('%cStory Mode', 'color:#f5c518;font-weight:bold');
+      console.log(`  Player: ${StorySave.getPlayerName()}  Rival: ${StorySave.getRivalName()}`);
+      console.log(`  Location: ${StorySave.getLocation()}`);
+      console.log(`  Badges: ${StorySave.getBadgeCount()}/8`);
+      const party = StorySave.getParty();
+      if (party.length) {
+        console.log(`  Party: ${party.map(m => `${POKEMON_DATA[m.key]?.name||m.key} Lv${m.level}`).join(', ')}`);
+      }
+    } else {
+      console.log('%cStory Mode', 'color:#f5c518;font-weight:bold');
+      console.log('  Not started');
+    }
 
-    console.log(`Unlocked ${pokemonId}`);
+    console.groupEnd();
+    return '✅ See above';
+  }
+
+  // ════════════════════════════════════════════════
+  //  COLLECTION
+  // ════════════════════════════════════════════════
+
+  function unlock(code, key) {
+    if (!_auth(code)) return;
+    const d = _pkmn(key);
+    if (!d) { _log(`Unknown Pokémon: ${key}`, 'error'); return; }
+    const wasNew = SaveSystem.unlockPokemon(key.toLowerCase());
+    if (typeof TeamBuilder !== 'undefined') TeamBuilder.renderCollection();
+    if (typeof Tower !== 'undefined') Tower.refreshLeadPicker();
+    _log(`${wasNew ? 'Unlocked' : 'Already had'} ${d.name} ✓`, wasNew ? 'success' : 'warn');
   }
 
   function unlockAll(code) {
-    if (!check(code)) return;
-
-    Object.keys(POKEMON_DATA).forEach(id => {
-      POKEMON_DATA[id].unlocked = true;
+    if (!_auth(code)) return;
+    let count = 0;
+    Object.keys(POKEMON_DATA).forEach(key => {
+      if (SaveSystem.unlockPokemon(key)) count++;
     });
+    if (typeof TeamBuilder !== 'undefined') TeamBuilder.renderCollection();
+    if (typeof Tower !== 'undefined') Tower.refreshLeadPicker();
+    _log(`Unlocked ${count} new Pokémon (${Object.keys(POKEMON_DATA).length} total) ✓`, 'success');
+  }
 
-    console.log("All Pokémon unlocked");
+  function lock(code, key) {
+    if (!_auth(code)) return;
+    const d = _pkmn(key);
+    if (!d) { _log(`Unknown Pokémon: ${key}`, 'error'); return; }
+    const k = key.toLowerCase();
+    const save = SaveSystem.get();
+    save.unlocked = save.unlocked.filter(x => x !== k);
+    if (POKEMON_DATA[k]) POKEMON_DATA[k].unlocked = false;
+    SaveSystem.save();
+    if (typeof TeamBuilder !== 'undefined') TeamBuilder.renderCollection();
+    _log(`Locked ${d.name}`, 'warn');
   }
 
   function lockAll(code) {
-    if (!check(code)) return;
+    if (!_auth(code)) return;
+    const save = SaveSystem.get();
+    save.unlocked = [];
+    Object.values(POKEMON_DATA).forEach(d => d.unlocked = false);
+    SaveSystem.save();
+    if (typeof TeamBuilder !== 'undefined') TeamBuilder.renderCollection();
+    _log('All Pokémon locked', 'warn');
+  }
 
-    Object.keys(POKEMON_DATA).forEach(id => {
-      POKEMON_DATA[id].unlocked = false;
+  function listPokemon(filter) {
+    const entries = Object.entries(POKEMON_DATA);
+    let list;
+    if (filter === 'unlocked')     list = entries.filter(([,d]) => d.unlocked);
+    else if (filter === 'locked')  list = entries.filter(([,d]) => !d.unlocked);
+    else                           list = entries;
+    console.table(list.map(([key, d]) => ({
+      key, name: d.name, id: d.id,
+      types: d.types?.join('/'),
+      unlocked: d.unlocked,
+    })));
+    return `${list.length} Pokémon listed`;
+  }
+
+  // ════════════════════════════════════════════════
+  //  SHINIES
+  // ════════════════════════════════════════════════
+
+  function unlockShiny(code, key) {
+    if (!_auth(code)) return;
+    const d = _pkmn(key);
+    if (!d) { _log(`Unknown Pokémon: ${key}`, 'error'); return; }
+    const k = key.toLowerCase();
+    const wasNew = SaveSystem.unlockShiny(k);
+    if (typeof TeamBuilder !== 'undefined') TeamBuilder.renderTeamSlots();
+    _log(`${wasNew ? 'Unlocked' : 'Already had'} ✨ Shiny ${d.name} ✓`, wasNew ? 'success' : 'warn');
+  }
+
+  function unlockAllShinies(code) {
+    if (!_auth(code)) return;
+    let count = 0;
+    Object.keys(POKEMON_DATA).forEach(key => {
+      if (SaveSystem.unlockShiny(key)) count++;
     });
-
-    console.log("All Pokémon locked");
+    if (typeof TeamBuilder !== 'undefined') TeamBuilder.renderTeamSlots();
+    _log(`Unlocked ${count} shinies ✓`, 'success');
   }
 
-  function listLocked() {
-    return Object.entries(POKEMON_DATA)
-      .filter(([_, p]) => !p.unlocked)
-      .map(([id]) => id);
+  function lockShiny(code, key) {
+    if (!_auth(code)) return;
+    const d = _pkmn(key);
+    if (!d) { _log(`Unknown Pokémon: ${key}`, 'error'); return; }
+    SaveSystem.lockShiny(key.toLowerCase());
+    _log(`Locked shiny ${d.name}`, 'warn');
   }
+
+  function lockAllShinies(code) {
+    if (!_auth(code)) return;
+    Object.keys(POKEMON_DATA).forEach(k => SaveSystem.lockShiny(k));
+    _log('All shinies locked', 'warn');
+  }
+
+  // ════════════════════════════════════════════════
+  //  LEVELS
+  // ════════════════════════════════════════════════
+
+  function setLevel(code, key, level) {
+    if (!_auth(code)) return;
+    const d = _pkmn(key);
+    if (!d) { _log(`Unknown Pokémon: ${key}`, 'error'); return; }
+    const lv = Math.max(1, parseInt(level));
+    SaveSystem.setTowerLevel(key.toLowerCase(), lv);
+    _log(`Set ${d.name} quick-battle/tower level → ${lv} ✓`, 'success');
+  }
+
+  // ════════════════════════════════════════════════
+  //  ITEMS / BAG
+  // ════════════════════════════════════════════════
+
+  const ITEM_KEYS = [
+    'potion','superPotion','fullRestore','revive','fullRevive',
+    'xAttack','xDefense','xSpeed',
+  ];
+
+  function giveItem(code, itemKey, amount = 1) {
+    if (!_auth(code)) return;
+    if (!ITEM_KEYS.includes(itemKey)) {
+      _log(`Unknown item: "${itemKey}". Valid: ${ITEM_KEYS.join(', ')}`, 'error');
+      return;
+    }
+    const n = Math.max(1, parseInt(amount));
+    SaveSystem.addItem(itemKey, n);
+    _log(`Added ${n}× ${itemKey}  (now: ${SaveSystem.getItemCount(itemKey)}) ✓`, 'success');
+  }
+
+  function fillBag(code) {
+    if (!_auth(code)) return;
+    const amounts = { potion:99, superPotion:99, fullRestore:99,
+                      revive:99, fullRevive:99, xAttack:99,
+                      xDefense:99, xSpeed:99 };
+    Object.entries(amounts).forEach(([k, v]) => {
+      const current = SaveSystem.getItemCount(k);
+      if (v > current) SaveSystem.addItem(k, v - current);
+    });
+    _log('Bag maxed out ✓', 'success');
+  }
+
+  function clearBag(code) {
+    if (!_auth(code)) return;
+    const inv = SaveSystem.get().inventory;
+    ITEM_KEYS.forEach(k => { inv[k] = 0; });
+    SaveSystem.save();
+    _log('Bag cleared', 'warn');
+  }
+
+  function listItems() {
+    const inv = SaveSystem.getInventory();
+    console.table(Object.fromEntries(ITEM_KEYS.map(k => [k, inv[k] ?? 0])));
+    return 'Items listed above';
+  }
+
+  // ════════════════════════════════════════════════
+  //  TOWER
+  // ════════════════════════════════════════════════
+
+  function setTowerFloor(code, floor) {
+    if (!_auth(code)) return;
+    if (!Tower.getIsActive()) {
+      _log('No active tower run. Start a run first.', 'error');
+      return;
+    }
+    const f = Math.max(1, parseInt(floor));
+    const save = SaveSystem.get();
+    save.towerRun = f;
+    SaveSystem.save();
+    // Also update the internal floor counter via advanceFloor trick
+    // We directly set via save since Tower.currentFloor is private
+    _log(`Tower floor set to ${f}. The next floor transition will show floor ${f}.`, 'success');
+    _log('Tip: the change takes effect on your next battle.', 'info');
+  }
+
+  function addEgg(code, rarityId = 'common') {
+    if (!_auth(code)) return;
+    if (!Tower.getIsActive()) {
+      _log('No active tower run. This adds an egg to the current run party.', 'error');
+      return;
+    }
+    const rid = rarityId.toUpperCase();
+    if (!Tower.RARITY[rid]) {
+      _log(`Unknown rarity: "${rarityId}". Use: common/uncommon/rare/epic/legendary`, 'error');
+      return;
+    }
+    const egg = Tower.rollEgg();
+    // Override with requested rarity
+    const forced = (() => {
+      const rd = Tower.RARITY[rid];
+      const pool = rd.pool.filter(k => POKEMON_DATA[k]);
+      if (!pool.length) return null;
+      const key = pool[Math.floor(Math.random() * pool.length)];
+      return { rarity: rid, rarityData: rd, key, name: POKEMON_DATA[key]?.name || key };
+    })();
+    if (!forced) { _log('No valid Pokémon in that rarity pool.', 'error'); return; }
+    Tower.setPendingEgg(forced);
+    _log(`${forced.rarityData.label} egg (${POKEMON_DATA[forced.key]?.name}) queued — it will hatch after your next battle. ✓`, 'success');
+  }
+
+  // ════════════════════════════════════════════════
+  //  STORY MODE
+  // ════════════════════════════════════════════════
+
+  function addToStoryParty(code, key) {
+    if (!_auth(code)) return;
+    if (typeof StorySave === 'undefined' || !StorySave.hasStarted()) {
+      _log('Story mode not started.', 'error'); return;
+    }
+    const d = _pkmn(key);
+    if (!d) { _log(`Unknown Pokémon: ${key}`, 'error'); return; }
+    const k = key.toLowerCase();
+    const added = StorySave.addToParty(k, 5);
+    SaveSystem.unlockPokemon(k);
+    _log(added ? `${d.name} added to story party ✓` : `Party full (6/6) — couldn't add ${d.name}`, added ? 'success' : 'warn');
+  }
+
+  function setStoryPokemonLevel(code, key, level) {
+    if (!_auth(code)) return;
+    if (typeof StorySave === 'undefined' || !StorySave.hasStarted()) {
+      _log('Story mode not started.', 'error'); return;
+    }
+    const d = _pkmn(key);
+    if (!d) { _log(`Unknown Pokémon: ${key}`, 'error'); return; }
+    const lv  = Math.max(1, parseInt(level));
+    const k   = key.toLowerCase();
+    const xp  = typeof XPSystem !== 'undefined' ? XPSystem.xpForLevel(lv) : 0;
+    StorySave.updatePartyMember(k, lv, xp);
+    _log(`${d.name} story level → ${lv} ✓`, 'success');
+  }
+
+  function healStoryParty(code) {
+    if (!_auth(code)) return;
+    if (typeof StorySave === 'undefined' || !StorySave.hasStarted()) {
+      _log('Story mode not started.', 'error'); return;
+    }
+    // createPokemonInstance always creates at full HP — just reset xp to floor
+    const party = StorySave.getParty();
+    party.forEach(m => {
+      const xp = typeof XPSystem !== 'undefined' ? XPSystem.xpForLevel(m.level) : 0;
+      StorySave.updatePartyMember(m.key, m.level, xp);
+    });
+    _log(`Healed ${party.length} Pokémon in story party ✓`, 'success');
+  }
+
+  function addBadge(code, index) {
+    if (!_auth(code)) return;
+    if (typeof StorySave === 'undefined' || !StorySave.hasStarted()) {
+      _log('Story mode not started.', 'error'); return;
+    }
+    const i = parseInt(index);
+    if (isNaN(i) || i < 0 || i > 7) {
+      _log('Badge index must be 0-7 (0=Brock, 1=Misty, 2=Lt.Surge, 3=Erika, 4=Koga, 5=Sabrina, 6=Blaine, 7=Giovanni)', 'error');
+      return;
+    }
+    StorySave.earnBadge(i);
+    const names = ['Boulder','Cascade','Thunder','Rainbow','Soul','Marsh','Volcano','Earth'];
+    _log(`Earned ${names[i]} Badge ✓`, 'success');
+  }
+
+  function allBadges(code) {
+    if (!_auth(code)) return;
+    if (typeof StorySave === 'undefined' || !StorySave.hasStarted()) {
+      _log('Story mode not started.', 'error'); return;
+    }
+    for (let i = 0; i < 8; i++) StorySave.earnBadge(i);
+    _log('All 8 gym badges earned ✓', 'success');
+  }
+
+  function warpTo(code, mapId) {
+    if (!_auth(code)) return;
+    if (typeof MapData === 'undefined') { _log('MapData not loaded.', 'error'); return; }
+    const map = MapData.getMap(mapId);
+    if (!map) {
+      _log(`Unknown map: "${mapId}". Use PokeCheats.listMaps()`, 'error');
+      return;
+    }
+    StorySave.setLocation(mapId);
+    if (typeof Overworld !== 'undefined') {
+      Screen.show('screen-overworld');
+      Overworld.init();
+    }
+    _log(`Warped to ${map.name} ✓`, 'success');
+  }
+
+  function listMaps() {
+    if (typeof MapData === 'undefined') { _log('MapData not loaded.', 'error'); return; }
+    const maps = MapData.listMaps().map(id => {
+      const m = MapData.getMap(id);
+      return { id, name: m?.name, theme: m?.theme };
+    });
+    console.table(maps);
+    return 'Maps listed above';
+  }
+
+  // ════════════════════════════════════════════════
+  //  RESETS
+  // ════════════════════════════════════════════════
+
+  function resetStory(code) {
+    if (!_auth(code)) return;
+    if (typeof StorySave === 'undefined') { _log('StorySave not loaded.', 'error'); return; }
+    StorySave.resetStory();
+    _log('Story mode reset. Start fresh from the main menu.', 'warn');
+  }
+
+  function resetAll(code) {
+    if (!_auth(code)) return;
+    const confirmed = window.confirm('⚠️ This will delete ALL save data. Are you sure?');
+    if (!confirmed) { _log('Reset cancelled.', 'info'); return; }
+    SaveSystem.reset();
+    _log('All save data wiped. Reload the page to start fresh.', 'warn');
+    setTimeout(() => location.reload(), 1500);
+  }
+
+  // ════════════════════════════════════════════════
+  //  PUBLIC
+  // ════════════════════════════════════════════════
+
+  _log('PokéArena cheats loaded. Type PokeCheats.help() to see all commands.', 'info');
 
   return {
-    unlockPokemon,
-    unlockAll,
+    help, status,
+    // Collection + Shinies
+    unlock, unlockAll, lock, lockAll, listPokemon,
+    unlockShiny, unlockAllShinies, lockShiny, lockAllShinies,
+    // Levels
+    setLevel,
+    // Items
+    giveItem, fillBag, clearBag, listItems,
+    // Tower
+    setTowerFloor, addEgg,
+    // Story
+    addToStoryParty, setStoryPokemonLevel, healStoryParty,
+    addBadge, allBadges, warpTo, listMaps,
+    // Resets
+    resetStory, resetAll,
+    // Legacy aliases
+    unlockPokemon: unlock,
     lockAll,
-    listLocked
+    listLocked: () => listPokemon('locked'),
   };
+
 })();

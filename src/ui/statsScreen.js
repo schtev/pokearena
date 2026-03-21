@@ -51,6 +51,9 @@ const StatsScreen = (() => {
       .map(t => `<span class="type-badge type-${t}">${t}</span>`)
       .join('');
 
+    // Ability
+    renderAbility(key);
+
     // Stat bars
     renderStatBars(instance, data.baseStats);
 
@@ -62,6 +65,56 @@ const StatsScreen = (() => {
 
     // Learnset table
     renderLearnset(key, level);
+  }
+
+  // ─── Ability panel ───────────────────────────
+  function renderAbility(key) {
+    // Find or create the ability container
+    let container = document.getElementById('stats-ability');
+    if (!container) return;
+
+    if (typeof AbilitySystem === 'undefined') {
+      container.innerHTML = '';
+      return;
+    }
+
+    const abilityName = AbilitySystem.getAbilityName(key);
+    const abilityDesc = AbilitySystem.getAbilityDesc(key);
+    const ab          = AbilitySystem.getAbility(key);
+
+    if (!abilityName || abilityName === 'None') {
+      container.innerHTML = '<span class="stats-ability-none">No ability data</span>';
+      return;
+    }
+
+    // Classify trigger type for colour coding
+    let triggerClass = 'ability-misc';
+    if (ab) {
+      if (ab.onSwitchIn)    triggerClass = 'ability-switchin';
+      if (ab.onAttack)      triggerClass = 'ability-attack';
+      if (ab.onDefend)      triggerClass = 'ability-defend';
+      if (ab.onEndOfTurn)   triggerClass = 'ability-eot';
+      if (ab.onHit)         triggerClass = 'ability-onhit';
+      if (ab.onStatusApply) triggerClass = 'ability-status';
+    }
+
+    const TRIGGER_LABELS = {
+      'ability-switchin': 'On switch-in',
+      'ability-attack':   'On attack',
+      'ability-defend':   'On hit',
+      'ability-onhit':    'Contact',
+      'ability-eot':      'End of turn',
+      'ability-status':   'Status',
+      'ability-misc':     'Passive',
+    };
+
+    container.innerHTML = `
+      <div class="stats-ability-row">
+        <span class="stats-ability-name">${abilityName}</span>
+        <span class="stats-ability-trigger ${triggerClass}">${TRIGGER_LABELS[triggerClass]}</span>
+      </div>
+      <p class="stats-ability-desc">${abilityDesc || 'No description available.'}</p>
+    `;
   }
 
   // ─── Stat bars ────────────────────────────────

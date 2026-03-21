@@ -44,6 +44,8 @@ const Pokedex = (() => {
       card.title     = isUnlocked ? data.name : '???';
 
       if (isUnlocked) {
+        const abilityName = (typeof AbilitySystem !== 'undefined')
+          ? AbilitySystem.getAbilityName(key) : '';
         card.innerHTML = `
           <div class="dex-num">#${String(data.id).padStart(3,'0')}</div>
           <img class="dex-sprite" src="${getSpriteUrl(data.id)}" alt="${data.name}" loading="lazy" />
@@ -51,6 +53,7 @@ const Pokedex = (() => {
           <div class="dex-types">
             ${data.types.map(t => `<span class="type-badge type-${t}">${t}</span>`).join('')}
           </div>
+          ${abilityName && abilityName !== 'None' ? `<div class="dex-ability">${abilityName}</div>` : ''}
         `;
         card.addEventListener('click', () => {
           SoundSystem.play('menuSelect');

@@ -16,6 +16,14 @@ const Screen = (() => {
    * @param {string} id - e.g. 'screen-menu'
    */
   function show(id) {
+    // Pre-init screens that inject their own HTML
+    if (id === 'screen-overworld' && !document.getElementById('screen-overworld')) {
+      if (typeof Overworld !== 'undefined') Overworld.init();
+    }
+    if (id === 'screen-starter' && !document.getElementById('screen-starter')) {
+      if (typeof StarterSelect !== 'undefined') StarterSelect.init();
+    }
+
     // Hide current screen
     if (currentScreen) {
       currentScreen.style.display = 'none';
@@ -55,6 +63,7 @@ const Screen = (() => {
 
       case 'screen-tower-menu':
         Tower.init();
+        Tower.refreshLeadPicker();
         if (typeof FloorTransition !== 'undefined') {
           const floorData = Tower.generateFloor(Tower.getCurrentFloor());
           FloorTransition.updateMenuPreview(floorData);
@@ -86,6 +95,15 @@ const Screen = (() => {
         break;
 
       case 'screen-battle':
+        break;
+
+      case 'screen-overworld':
+        // HTML already injected by show() pre-init above;
+        // re-call init() to reset state when returning to overworld
+        if (typeof Overworld !== 'undefined') Overworld.init();
+        break;
+
+      case 'screen-starter':
         break;
     }
   }

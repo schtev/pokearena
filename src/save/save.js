@@ -30,15 +30,27 @@ const SaveSystem = (() => {
     towerRun:  0,
     pokemonLevels: {},   // key → level earned through the tower
     inventory: {
-      potion:       3,
-      superPotion:  1,
-      fullRestore:  0,
-      revive:       1,
-      fullRevive:   0,
-      xAttack:      1,
-      xDefense:     0,
-      xSpeed:       1,
+      potion:       3,    superPotion:  1,    hyperPotion:  0,
+      maxPotion:    0,    fullRestore:  0,    freshWater:   0,
+      sodaPop:      0,    lemonade:     0,    moomooMilk:   0,
+      antidote:     2,    burnHeal:     1,    iceHeal:      0,
+      awakening:    1,    parlyzHeal:   1,    fullHeal:     0,
+      ether:        0,    maxEther:     0,    elixir:       0,
+      maxElixir:    0,    revive:       1,    maxRevive:    0,
+      fullRevive:   0,    revivalHerb:  0,
+      xAttack:      1,    xDefense:     0,    xSpeed:       1,
+      xSpecial:     0,    xSpDef:       0,    xAccuracy:    0,
+      guardSpec:    0,    direHit:      0,
+      pokeball:     5,    greatball:    0,    ultraball:    0,
+      firestone:    0,    waterstone:   0,    thunderstone: 0,
+      leafstone:    0,    moonstone:    0,    rareCandy:    0,
     },
+    // Tower run save slots (3 independent runs)
+    towerSlots: [null, null, null],
+    // Shiny unlocks: Set of pokemon keys
+    shinies: [],
+    // Per-pokemon held items for quick battle (key → itemKey)
+    heldItems: {},
     playtime:  0,
     lastSaved: null
   };
@@ -89,6 +101,13 @@ const SaveSystem = (() => {
     if (!parsed.pokemonLevels) {
       parsed.pokemonLevels = {};
     }
+    // v3 → v4: add tower save slots
+    if (!parsed.towerSlots) {
+      parsed.towerSlots = [null, null, null];
+    }
+    // v4 → v5: shinies and heldItems
+    if (!parsed.shinies)    parsed.shinies    = [];
+    if (!parsed.heldItems)  parsed.heldItems  = {};
     parsed.version = SAVE_VERSION;
     return { ...DEFAULTS, ...parsed };
   }
@@ -169,13 +188,73 @@ const SaveSystem = (() => {
     return `${hours}h ${mins % 60}m ${secs % 60}s`;
   }
 
+  // ── Shiny API ──────────────────────────────────
+  function getShinies()          { return get().shinies || []; }
+  function hasShiny(key)         { return (get().shinies || []).includes(key); }
+  function unlockShiny(key) {
+    if (!get().shinies) get().shinies = [];
+    if (!get().shinies.includes(key)) {
+      get().shinies.push(key);
+      save();
+      return true;
+    }
+    return false;
+  }
+  function lockShiny(key) {
+    if (!get().shinies) return;
+    get().shinies = get().shinies.filter(k => k !== key);
+    save();
+  }
+
+  // ── Held items (quick battle per-pokemon) ───────
+  function getHeldItems()        { return get().heldItems || {}; }
+  function getHeldItem(key)      { return (get().heldItems || {})[key] || null; }
+  function setHeldItem(key, item) {
+    if (!get().heldItems) get().heldItems = {};
+    get().heldItems[key] = item;
+    save();
+  }
+  function clearHeldItem(key) {
+    if (!get().heldItems) return;
+    delete get().heldItems[key];
+    save();
+  }
+
+  // ── Tower slot API ─────────────────────────────
+  function getTowerSlots() {
+    return get().towerSlots || [null, null, null];
+  }
+
+  function getTowerSlot(idx) {
+    return (get().towerSlots || [null,null,null])[idx] || null;
+  }
+
+  function saveTowerSlot(idx, slotData) {
+    if (!get().towerSlots) get().towerSlots = [null,null,null];
+    get().towerSlots[idx] = slotData;
+    save();
+  }
+
+  function clearTowerSlot(idx) {
+    if (!get().towerSlots) get().towerSlots = [null,null,null];
+    get().towerSlots[idx] = null;
+    save();
+  }
+
+  function getActiveTowerSlot() {
+    return (get().towerSlots || [null,null,null]).findIndex(s => s && s.active);
+  }
+
   return {
     load, save, reset, get,
     getTeam, getUnlocked, getBestFloor, getInventory,
     getPokemonLevels, getTowerLevel, setTowerLevel,
     setTeam, unlockPokemon, setBestFloor, setTowerRun,
     getItemCount, addItem, useItem,
-    getPlaytimeString
+    getPlaytimeString,
+    getTowerSlots, getTowerSlot, saveTowerSlot, clearTowerSlot, getActiveTowerSlot,
+    getShinies, hasShiny, unlockShiny, lockShiny,
+    getHeldItems, getHeldItem, setHeldItem, clearHeldItem,
   };
 
 })();

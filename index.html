@@ -23,6 +23,12 @@
         <div class="logo-sub">Battle · Climb · Conquer</div>
       </div>
       <nav class="menu-nav">
+        <button class="menu-btn" id="menu-story-btn" onclick="StarterSelect.launch()" style="border-color:var(--accent-green);box-shadow:0 4px 0 #1a5c2a">
+          <span class="btn-icon">🗺️</span> Story Mode
+        </button>
+        <button class="menu-btn hidden" id="menu-continue-btn" onclick="Screen.show('screen-overworld')" style="border-color:var(--accent-blue);box-shadow:0 4px 0 #1a3a6a">
+          <span class="btn-icon">▶️</span> Continue Story
+        </button>
         <button class="menu-btn" onclick="Screen.show('screen-team')">
           <span class="btn-icon">⚔️</span> Quick Battle
         </button>
@@ -42,7 +48,7 @@
           <span class="btn-icon">⚙️</span> Settings
         </button>
       </nav>
-      <div class="menu-footer">v0.4.0 — Parts 1–4 complete</div>
+      <div class="menu-footer">v0.5.0 — Story Mode added</div>
     </div>
   </div>
 
@@ -161,6 +167,8 @@
 
     <!-- Battle Arena -->
     <div class="battle-arena">
+      <!-- Weather particle overlay -->
+      <canvas id="weather-particle-canvas" class="weather-particle-canvas"></canvas>
 
       <!-- Enemy Side -->
       <div class="battle-side enemy-side">
@@ -179,6 +187,11 @@
           <div class="info-types" id="enemy-types"></div>
         </div>
         <div class="sprite-platform enemy-platform">
+          <!-- Story mode trainer sprite — hidden in quick battle / tower -->
+          <div class="trainer-sprite-panel hidden" id="trainer-sprite-panel">
+            <img class="trainer-battle-sprite" id="trainer-battle-sprite" src="" alt="" />
+            <div class="trainer-battle-name" id="trainer-battle-name"></div>
+          </div>
           <img class="battle-sprite enemy-sprite" id="enemy-sprite"
             src="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/6.png"
             alt="Enemy Pokémon" />
@@ -286,6 +299,7 @@
     <!-- Tower HUD (shown only in tower mode) -->
     <div class="tower-hud hidden" id="tower-hud">
       <span>🗼 Floor <span id="tower-floor-num">1</span></span>
+      <div class="tower-party-hud" id="tower-party-hud"></div>
     </div>
 
     <!-- Weather HUD (Part 5) -->
@@ -337,26 +351,32 @@
           <span class="stat-value" id="best-floor">—</span>
         </div>
         <div class="tower-stat-card">
-          <span class="stat-label">Current Run</span>
-          <span class="stat-value" id="current-floor">Floor 1</span>
-        </div>
-        <div class="tower-stat-card">
           <span class="stat-label">Unlocked Pokémon</span>
           <span class="stat-value" id="unlocked-count">12</span>
         </div>
       </div>
-      <div class="floor-preview" id="floor-preview">
-        <div class="floor-card">
-          <div class="floor-type-badge">TRAINER</div>
-          <p>⚔️ Next up: Youngster Joey</p>
-          <p class="floor-reward">Reward: Unlock Rattata</p>
-        </div>
+
+      <!-- 3 save slots -->
+      <div class="tower-slots-label">Select a save slot:</div>
+      <div class="tower-slots-grid" id="tower-slots-grid">
+        <!-- populated by Tower.init() -->
       </div>
-      <button class="big-btn" onclick="startTowerBattle()">Enter Tower →</button>
-      <button class="big-btn" id="tower-resume-btn" style="background:var(--accent-purple);box-shadow:0 4px 0 #6020a0" class="hidden" onclick="resumeTowerRun()">
+
+      <!-- Lead picker — shown when a NEW slot is selected -->
+      <div id="tower-lead-section" class="hidden">
+        <div class="tower-slots-label">Choose your lead Pokémon:</div>
+        <div id="tower-lead-picker" class="tower-lead-picker"></div>
+        <button class="big-btn" id="tower-enter-btn" onclick="startTowerBattle()">
+          🗼 Enter Tower →
+        </button>
+      </div>
+
+      <!-- Resume button — shown when an ACTIVE slot is selected -->
+      <button class="big-btn hidden" id="tower-resume-btn"
+              onclick="resumeTowerRun()"
+              style="background:var(--accent-purple);box-shadow:0 4px 0 #6020a0">
         🔄 <span id="tower-resume-floor">Resume Run</span>
       </button>
-      <button class="big-btn secondary" onclick="Screen.show('screen-team')">Build Team First</button>
     </div>
   </div>
 
@@ -551,7 +571,7 @@
 
       <div class="settings-section">
         <h3 class="settings-section-title">ℹ️ About</h3>
-        <p class="settings-about">PokéArena v0.4.0 — Parts 1–4 complete</p>
+        <p class="settings-about">PokéArena v0.5.0 — Story Mode added</p>
         <p class="settings-about">Built with vanilla JS + Web Audio API.</p>
         <p class="settings-about">Sprites © Nintendo / Game Freak via PokeAPI.</p>
         <p class="settings-about">This is a fan project for educational purposes.</p>
@@ -596,6 +616,10 @@
             <img id="stats-sprite" src="" alt="" />
           </div>
           <div id="stats-types" class="stats-type-row"></div>
+
+          <!-- Ability -->
+          <div class="stats-section-title">Ability</div>
+          <div id="stats-ability" class="stats-ability-box"></div>
 
           <!-- Level slider -->
           <div class="stats-level-slider">
@@ -681,36 +705,60 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
   <!-- JS Modules -->
   <!-- Part 2: Save, Items, Evolution, Audio -->
+  <!-- ── Core data (no dependencies) ── -->
   <script src="src/save/save.js"></script>
-  <script src="src/items/items.js"></script>
-  <script src="src/pokemon/evolution.js"></script>
-  <script src="src/audio/sound.js"></script>
-  <!-- Part 3: Learnsets, Move Learning, Stats Screen, Floor Transition -->
-  <script src="src/data/learnsets.js"></script>
-  <script src="src/pokemon/moveLearning.js"></script>
-  <script src="src/ui/statsScreen.js"></script>
-  <script src="src/tower/floorTransition.js"></script>
-  <!-- Part 4: Pokédex, Settings, PvP -->
-  <script src="src/ui/pokedex.js"></script>
-  <script src="src/ui/settings.js"></script>
-  <script src="src/online/pvp.js"></script>
-  <!-- Part 5: Weather, Abilities, Held Items, XP -->
-  <script src="src/battle/weather.js"></script>
-  <script src="src/battle/abilities.js"></script>
-  <script src="src/battle/heldItems.js"></script>
-  <script src="src/pokemon/xp.js"></script>
-  <!-- Part 6: Battle Log, Move Animations -->
-  <script src="src/ui/battleLog.js"></script>
-  <script src="src/battle/moveAnimations.js"></script>
-  <!-- Core -->
   <script src="src/data/pokemon.js"></script>
   <script src="src/data/moves.js"></script>
+  <script src="src/data/learnsets.js"></script>
+  <script src="src/items/items.js"></script>
+
+  <!-- ── Pokemon systems (need pokemon+moves data) ── -->
+  <script src="src/pokemon/xp.js"></script>
+  <script src="src/pokemon/evolution.js"></script>
+  <script src="src/pokemon/moveLearning.js"></script>
+
+  <!-- ── Battle systems (need pokemon+moves+xp) ── -->
+  <script src="src/battle/weather.js"></script>
   <script src="src/battle/engine.js"></script>
   <script src="src/battle/cpu.js"></script>
   <script src="src/battle/animations.js"></script>
+  <script src="src/battle/abilities.js"></script>
+  <script src="src/battle/heldItems.js"></script>
+  <script src="src/battle/moveAnimations.js"></script>
+
+  <!-- ── Audio ── -->
+  <script src="src/audio/sound.js"></script>
+
+  <!-- ── UI utilities ── -->
+  <script src="src/ui/battleLog.js"></script>
+  <script src="src/ui/statsScreen.js"></script>
+  <script src="src/ui/pokedex.js"></script>
+  <script src="src/ui/settings.js"></script>
+
+  <!-- ── Team builder (needs pokemon+save) ── -->
   <script src="src/team/teambuilder.js"></script>
+
+  <!-- ── Tower (needs pokemon+save+battle) ── -->
+  <script src="src/tower/floorTransition.js"></script>
+  <script src="src/tower/eggHatch.js"></script>
   <script src="src/tower/tower.js"></script>
+
+  <!-- ── Online ── -->
+  <script src="src/online/pvp.js"></script>
+
+  <!-- ── Story / Overworld (needs everything above) ── -->
+  <script src="src/story/storySave.js"></script>
+  <script src="src/story/trainerSprites.js"></script>
+  <script src="src/story/spriteManager.js"></script>
+  <script src="src/story/starterSelect.js"></script>
+  <script src="src/overworld/mapData.js"></script>
+  <script src="src/overworld/tilesetRenderer.js"></script>
+  <script src="src/overworld/overworld.js"></script>
+
+  <!-- ── UI router (needs all screens) ── -->
   <script src="src/ui/screen.js"></script>
+
+  <!-- ── Main entry point ── -->
   <script src="src/main.js"></script>
 </body>
 </html>

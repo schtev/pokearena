@@ -64,11 +64,14 @@ const FloorTransition = (() => {
         enemyListEl.appendChild(card);
       });
 
-      // Reward hint
+      // Egg reward hint (replaces old unlock rewards)
       const rewardEl = document.getElementById('ft-reward');
       if (rewardEl) {
-        if (floorData.reward) {
-          rewardEl.textContent = `🎁 Reward: Unlock ${floorData.reward.name}`;
+        if (floorData.egg) {
+          const rarityColour = floorData.egg.rarityData?.colour || '#f5c518';
+          rewardEl.innerHTML = `<span class="ft-egg-badge" style="border-color:${rarityColour};color:${rarityColour}">
+            🥚 ${floorData.egg.rarityData?.label || '?'} EGG on clear!
+          </span>`;
           rewardEl.style.display = 'block';
         } else {
           rewardEl.style.display = 'none';
@@ -145,9 +148,9 @@ const FloorTransition = (() => {
             </div>
           `).join('')}
         </div>
-        ${floorData.reward
-          ? `<p class="floor-reward">🎁 ${floorData.reward.name} unlock on clear!</p>`
-          : `<p style="color:var(--text-dim);font-size:12px">No reward this floor</p>`
+        ${floorData.egg
+          ? `<p class="floor-reward" style="color:var(--accent-yellow)">🥚 ${floorData.egg.rarityData?.label} Egg on clear!</p>`
+          : `<p style="color:var(--text-dim);font-size:12px">No egg this floor</p>`
         }
         <p style="color:${flavour.colour};font-family:var(--font-pixel);font-size:9px;margin-top:4px">
           ${floorData.trainerName}

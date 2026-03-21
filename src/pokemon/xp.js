@@ -51,9 +51,27 @@ const XPSystem = (() => {
    * @param {number} floorBonus   - 1.0 for quick battle, floor/10 for tower
    * @returns {number} XP to award
    */
-  function calcReward(defeated, floorBonus = 1) {
-    const base = Math.floor(defeated.level * 3 * floorBonus);
-    return Math.max(5, base);
+  /**
+   * Calculate XP reward for defeating an enemy Pokémon.
+   * Scales relative to enemy level. In tower mode the floor bonus
+   * is applied but starts at a sensible baseline (1.0 at floor 1).
+   *
+   * @param {object} defeated     - Fainted enemy Pokémon
+   * @param {number} floorBonus   - 1.0 at floor 1, grows with floor
+   * @param {number} playerLevel  - Current player active Pokémon level
+   */
+  function calcReward(defeated, floorBonus = 1, playerLevel = 5) {
+    // Base: enemy level × 7 (roughly 7× faster than raw level³ grind)
+    const base = defeated.level * 7;
+
+    // Level-difference multiplier: beating higher-level enemies gives bonus
+    const lvDiff   = (defeated.level - playerLevel) * 0.05;
+    const lvMult   = Math.max(0.5, Math.min(3.0, 1 + lvDiff));
+
+    // Floor bonus: gently increases with floor (1.0 at floor 1, 2.0 at floor 10)
+    const fBonus = Math.max(1, Math.min(3, floorBonus));
+
+    return Math.max(10, Math.floor(base * lvMult * fBonus));
   }
 
   /**
@@ -65,14 +83,14 @@ const XPSystem = (() => {
    * @returns {{ levelled: boolean, oldLevel: number, newLevel: number }[]}
    */
   function grant(pkmn, amount) {
-    if (!pkmn || pkmn.level >= 100) return [];
+    if (!pkmn) return [];
 
     if (pkmn.xp === undefined) pkmn.xp = xpForLevel(pkmn.level);
 
     pkmn.xp += amount;
 
     const events = [];
-    while (pkmn.level < 100 && pkmn.xp >= xpForLevel(pkmn.level + 1)) {
+    while (pkmn.xp >= xpForLevel(pkmn.level + 1)) {
       const oldLevel = pkmn.level;
       pkmn.level++;
       events.push({ levelled: true, oldLevel, newLevel: pkmn.level });

@@ -1,268 +1,314 @@
 // ═══════════════════════════════════════════════════
-//  src/battle/weather.js   (Part 5)
-//  Battle weather system: Sunny, Rain, Sandstorm, Hail
-//  Affects move power, end-of-turn damage, and some
-//  abilities. Weather lasts 5 turns by default.
+//  src/battle/weather.js
+//  Full battle weather + terrain system.
+//
+//  Weather: Sun, Rain, Sand, Hail, Snow (Gen 9), Fog
+//  Terrain: Electric, Psychic, Misty, Grassy
+//
+//  Effects applied per-turn via applyEndOfTurn(allPkmn).
+//  Move modifier via getMoveMult(type, moveId, attacker).
 // ═══════════════════════════════════════════════════
 
 const Weather = (() => {
 
   const TYPES = {
-    NONE:      'none',
-    SUN:       'sun',
-    RAIN:      'rain',
-    SAND:      'sand',
-    HAIL:      'hail',
+    NONE:             'none',
+    SUN:              'sun',
+    RAIN:             'rain',
+    SAND:             'sand',
+    HAIL:             'hail',
+    SNOW:             'snow',           // Gen 9 — no direct damage, defensive bonus for Ice
+    FOG:              'fog',            // accuracy penalty
+    ELECTRICTERRAIN:  'electricterrain',
+    PSYCHICTERRAIN:   'psychicterrain',
+    MISTYTERRAIN:     'mistyterrain',
+    GRASSYTERRAIN:    'grassyterrain',
   };
 
-  // Current battle weather state (reset each battle)
-  let _current  = TYPES.NONE;
-  let _turnsLeft = 0;
+  let _current    = TYPES.NONE;
+  let _turnsLeft  = 0;
+  let _suppressed = false;   // Cloud Nine / Air Lock
 
-  // Visual config per weather
+  // ── Visual / UI config ──────────────────────────
   const CONFIG = {
-    none: { label: '',            icon: '',   bgClass: '',          particleColor: null },
-    sun:  { label: 'Harsh sunlight!', icon: '☀️', bgClass: 'weather-sun',  particleColor: '#f5c518' },
-    rain: { label: 'It\'s raining!',  icon: '🌧️', bgClass: 'weather-rain', particleColor: '#4e8cff' },
-    sand: { label: 'A sandstorm!',    icon: '🌪️', bgClass: 'weather-sand', particleColor: '#b8a038' },
-    hail: { label: 'It\'s hailing!',  icon: '🌨️', bgClass: 'weather-hail', particleColor: '#74d0f0' },
+    none:             { label:'',                      icon:'',   bg:'',                particle: null       },
+    sun:              { label:'Harsh sunlight!',        icon:'☀️',  bg:'weather-sun',    particle:'#f5c518'   },
+    rain:             { label:"It's raining!",          icon:'🌧️',  bg:'weather-rain',   particle:'#4e8cff'   },
+    sand:             { label:'A sandstorm is raging!', icon:'🌪️',  bg:'weather-sand',   particle:'#b8a038'   },
+    hail:             { label:"It's hailing!",          icon:'🌨️',  bg:'weather-hail',   particle:'#74d0f0'   },
+    snow:             { label:"It's snowing!",          icon:'❄️',  bg:'weather-snow',   particle:'#cce8ff'   },
+    fog:              { label:'A thick fog...',         icon:'🌫️',  bg:'weather-fog',    particle:'#8899aa'   },
+    electricterrain:  { label:'Electric Terrain!',      icon:'⚡',  bg:'terrain-elec',   particle:'#f5c518'   },
+    psychicterrain:   { label:'Psychic Terrain!',       icon:'🔮',  bg:'terrain-psych',  particle:'#b06aff'   },
+    mistyterrain:     { label:'Misty Terrain!',         icon:'🌸',  bg:'terrain-mist',   particle:'#ff8fa3'   },
+    grassyterrain:    { label:'Grassy Terrain!',        icon:'🌿',  bg:'terrain-grass',  particle:'#3ddc84'   },
   };
 
-  // ─── Set / clear ──────────────────────────────
+  const TERRAIN_TYPES = new Set([
+    TYPES.ELECTRICTERRAIN, TYPES.PSYCHICTERRAIN,
+    TYPES.MISTYTERRAIN,    TYPES.GRASSYTERRAIN,
+  ]);
+
+  function isTerrain(t) { return TERRAIN_TYPES.has(t); }
+
+  // ── Set / clear ─────────────────────────────────
   function set(type, turns = 5) {
-    _current   = type;
-    _turnsLeft = turns;
-    updateUI();
+    _current    = type;
+    _turnsLeft  = turns;
+    _suppressed = false;
+    _updateUI();
     return CONFIG[type]?.label || '';
   }
 
   function clear() {
     _current   = TYPES.NONE;
     _turnsLeft = 0;
-    updateUI();
+    _updateUI();
   }
 
-  function reset() { clear(); }
+  function suppress() {
+    _suppressed = true;
+    _updateUI();
+  }
 
-  function get()       { return _current; }
+  function current()   { return _suppressed ? TYPES.NONE : _current; }
   function turnsLeft() { return _turnsLeft; }
-  function isActive()  { return _current !== TYPES.NONE; }
 
-  // ─── End-of-turn tick ────────────────────────
-  /**
-   * Called at end of each turn. Ticks down duration,
-   * applies weather damage, returns log messages.
-   * @param {object[]} allPkmn - [playerActive, enemyActive]
-   * @returns {string[]} messages
-   */
-  function tick(allPkmn) {
+  // ── End-of-turn effects ─────────────────────────
+  function applyEndOfTurn(allPkmn) {
+    if (_suppressed) return [];
     if (_current === TYPES.NONE) return [];
+
     const msgs = [];
+    const c    = _current;
 
-    // Apply damage
-    allPkmn.forEach(pkmn => {
-      if (!pkmn || pkmn.currentHP <= 0) return;
+    allPkmn.forEach(p => {
+      if (!p || p.currentHP <= 0) return;
+      const types = p.types || [];
 
-      // Sand: damages non-Rock/Ground/Steel
-      if (_current === TYPES.SAND) {
-        const immune = ['rock','ground','steel'].some(t => pkmn.types.includes(t));
-        if (!immune) {
-          const dmg = Math.max(1, Math.floor(pkmn.maxHP / 16));
-          pkmn.currentHP = Math.max(0, pkmn.currentHP - dmg);
-          msgs.push(`${pkmn.name} is buffeted by the sandstorm!`);
+      // Sandstorm: 1/16 damage to non-Rock/Ground/Steel
+      if (c === TYPES.SAND) {
+        const immune = types.some(t => ['rock','ground','steel'].includes(t));
+        if (!immune && !p._sandImmune) {
+          const dmg = Math.max(1, Math.floor(p.maxHP / 16));
+          p.currentHP = Math.max(0, p.currentHP - dmg);
+          msgs.push(`${p.name} is buffeted by the sandstorm!`);
         }
       }
 
-      // Hail: damages non-Ice types
-      if (_current === TYPES.HAIL) {
-        const immune = pkmn.types.includes('ice');
-        if (!immune) {
-          const dmg = Math.max(1, Math.floor(pkmn.maxHP / 16));
-          pkmn.currentHP = Math.max(0, pkmn.currentHP - dmg);
-          msgs.push(`${pkmn.name} is pelted by hail!`);
+      // Hail: 1/16 damage to non-Ice types
+      if (c === TYPES.HAIL) {
+        const immune = types.includes('ice');
+        if (!immune && !p._hailImmune) {
+          const dmg = Math.max(1, Math.floor(p.maxHP / 16));
+          p.currentHP = Math.max(0, p.currentHP - dmg);
+          msgs.push(`${p.name} is pelted by hail!`);
         }
+      }
+
+      // Snow: no damage — Ice-types get +50% Sp.Def (applied in engine)
+      // Grassy Terrain: heals all grounded Pokémon 1/16 per turn
+      if (c === TYPES.GRASSYTERRAIN && !p._airborne) {
+        const restored = Math.max(1, Math.floor(p.maxHP / 16));
+        p.currentHP = Math.min(p.maxHP, p.currentHP + restored);
+        msgs.push(`${p.name} restored HP using the Grassy Terrain!`);
       }
     });
 
-    // Tick down duration
+    // Tick down
     _turnsLeft--;
     if (_turnsLeft <= 0) {
-      const endMsg = {
-        sun:  'The sunlight faded.',
-        rain: 'The rain stopped.',
-        sand: 'The sandstorm subsided.',
-        hail: 'The hail stopped.',
-      }[_current] || 'The weather cleared.';
-      msgs.push(endMsg);
+      const endMsgs = {
+        sun:             'The sunlight faded.',
+        rain:            'The rain stopped.',
+        sand:            'The sandstorm subsided.',
+        hail:            'The hail stopped.',
+        snow:            'The snow stopped.',
+        fog:             'The fog lifted.',
+        electricterrain: 'The Electric Terrain faded.',
+        psychicterrain:  'The Psychic Terrain faded.',
+        mistyterrain:    'The Misty Terrain faded.',
+        grassyterrain:   'The Grassy Terrain faded.',
+      };
+      msgs.push(endMsgs[_current] || 'The weather cleared.');
       clear();
     }
 
     return msgs;
   }
 
-  // ─── Move power modifier ──────────────────────
-  /**
-   * Returns a multiplier for a move's power based on weather.
-   * @param {string} moveType
-   * @returns {number}
-   */
-  function getMoveMult(moveType) {
-    if (_current === TYPES.SUN) {
-      if (moveType === 'fire')  return 1.5;
-      if (moveType === 'water') return 0.5;
+  // ── Move power modifier ─────────────────────────
+  function getMoveMult(moveType, moveId, attacker) {
+    const c = current();
+    let mult = 1;
+
+    // Weather boosts
+    if (c === TYPES.SUN) {
+      if (moveType === 'fire')  mult *= 1.5;
+      if (moveType === 'water') mult *= 0.5;
     }
-    if (_current === TYPES.RAIN) {
-      if (moveType === 'water') return 1.5;
-      if (moveType === 'fire')  return 0.5;
+    if (c === TYPES.RAIN) {
+      if (moveType === 'water') mult *= 1.5;
+      if (moveType === 'fire')  mult *= 0.5;
     }
+    if (c === TYPES.SAND) {
+      // Rock types get +50% Sp.Def — handled in engine, not move mult
+    }
+    if (c === TYPES.SNOW) {
+      // Ice types get +50% Sp.Def — handled in engine
+    }
+
+    // Terrain boosts (grounded attacker only)
+    if (!attacker?._airborne) {
+      if (c === TYPES.ELECTRICTERRAIN && moveType === 'electric') mult *= 1.3;
+      if (c === TYPES.PSYCHICTERRAIN  && moveType === 'psychic')  mult *= 1.3;
+      if (c === TYPES.GRASSYTERRAIN   && moveType === 'grass')    mult *= 1.3;
+      // Misty Terrain: halves Dragon moves
+      if (c === TYPES.MISTYTERRAIN    && moveType === 'dragon')   mult *= 0.5;
+    }
+
+    return mult;
+  }
+
+  // ── Accuracy modifier ───────────────────────────
+  function getAccuracyMult(moveId) {
+    const c = current();
+    if (c === TYPES.FOG)  return 0.6;  // all moves lose accuracy in fog
+    if (c === TYPES.RAIN  && moveId === 'thunder')  return 9999; // auto-hit
+    if (c === TYPES.HAIL  && moveId === 'blizzard') return 9999;
+    if (c === TYPES.SUN   && moveId === 'thunder')  return 0.5;
+    if (c === TYPES.SUN   && moveId === 'blizzard') return 0.5;
     return 1;
   }
 
-  // ─── Accuracy modifier ────────────────────────
-  /** Thunder/Blizzard hit through Rain/Hail without check */
-  function bypassAccuracy(moveId) {
-    if (_current === TYPES.RAIN && moveId === 'thunder')   return true;
-    if (_current === TYPES.HAIL && moveId === 'blizzard')  return true;
-    return false;
+  // ── Terrain status block ────────────────────────
+  function blocksSleepForGrounded() {
+    return current() === TYPES.ELECTRICTERRAIN;
   }
 
-  // ─── UI ───────────────────────────────────────
-  function updateUI() {
-    const cfg    = CONFIG[_current] || CONFIG.none;
-    const hudEl  = document.getElementById('weather-hud');
-    const arenaEl= document.querySelector('.battle-arena');
+  function blocksDragonForGrounded() {
+    return current() === TYPES.MISTYTERRAIN;
+  }
 
-    // Update HUD badge
-    if (hudEl) {
-      if (_current === TYPES.NONE) {
-        hudEl.classList.add('hidden');
+  function halvesDamageForGrounded() {
+    // Misty Terrain halves all non-Pokémon move damage vs grounded
+    return current() === TYPES.MISTYTERRAIN;
+  }
+
+  // ── Defensive stat bonus (Snow/Sand) ───────────
+  function getDefBonus(pkmn, statName) {
+    const c     = current();
+    const types = pkmn.types || [];
+    if (c === TYPES.SAND && statName === 'spdef' && types.includes('rock'))  return 1.5;
+    if (c === TYPES.SNOW && statName === 'defense' && types.includes('ice')) return 1.5;
+    return 1;
+  }
+
+  // ── UI ──────────────────────────────────────────
+  function _updateUI() {
+    const cfg   = CONFIG[_current] || CONFIG.none;
+    const hud   = document.getElementById('weather-hud');
+    const arena = document.querySelector('.battle-arena');
+    const canvas= document.getElementById('weather-particle-canvas');
+
+    // HUD badge
+    if (hud) {
+      if (_current === TYPES.NONE || _suppressed) {
+        hud.classList.add('hidden');
       } else {
-        hudEl.classList.remove('hidden');
-        hudEl.innerHTML = `${cfg.icon} ${_turnsLeft > 0 ? _turnsLeft + ' turns' : ''}`;
+        hud.classList.remove('hidden');
+        hud.innerHTML = `<span class="weather-icon">${cfg.icon}</span>` +
+          `<span class="weather-label">${cfg.label}</span>` +
+          `<span class="weather-turns">${_turnsLeft > 0 ? _turnsLeft + ' turns' : ''}</span>`;
       }
     }
 
-    // Swap arena background class
-    if (arenaEl) {
-      arenaEl.classList.remove('weather-sun','weather-rain','weather-sand','weather-hail');
-      if (_current !== TYPES.NONE) arenaEl.classList.add(cfg.bgClass);
+    // Arena background tint
+    if (arena) {
+      const allBgs = Object.values(CONFIG).map(c => c.bg).filter(Boolean);
+      arena.classList.remove(...allBgs);
+      if (_current !== TYPES.NONE && !_suppressed) arena.classList.add(cfg.bg);
     }
 
-    // Update / clear particle canvas
-    if (_current !== TYPES.NONE) {
-      startParticles(cfg.particleColor, _current);
-    } else {
-      stopParticles();
+    // Particles
+    stopParticles();
+    if (canvas && _current !== TYPES.NONE && !_suppressed && cfg.particle) {
+      // Size canvas to match arena
+      const rect = (arena || canvas).getBoundingClientRect();
+      canvas.width  = rect.width  || 600;
+      canvas.height = rect.height || 300;
+      startParticles(canvas);
     }
   }
 
-  // ─── Canvas particle effects ──────────────────
-  let _canvas = null;
-  let _ctx    = null;
-  let _raf    = null;
-  let _particles = [];
+  // ── Canvas particle system ───────────────────────
+  const _particles = [];
+  let _animFrame   = null;
 
-  function startParticles(color, weatherType) {
-    stopParticles();
+  function startParticles(canvas) {
+    _particles.length = 0;
+    if (_animFrame) cancelAnimationFrame(_animFrame);
+    const cfg = CONFIG[_current];
+    if (!cfg?.particle || _suppressed) return;
 
-    const arenaEl = document.querySelector('.battle-arena');
-    if (!arenaEl) return;
+    const ctx = canvas.getContext('2d');
+    const W   = canvas.width, H = canvas.height;
+    const color = cfg.particle;
 
-    _canvas = document.getElementById('weather-canvas');
-    if (!_canvas) {
-      _canvas = document.createElement('canvas');
-      _canvas.id = 'weather-canvas';
-      _canvas.style.cssText =
-        'position:absolute;inset:0;pointer-events:none;z-index:3;opacity:0.55;';
-      arenaEl.appendChild(_canvas);
-    }
-
-    _canvas.width  = arenaEl.offsetWidth;
-    _canvas.height = arenaEl.offsetHeight;
-    _ctx = _canvas.getContext('2d');
-
-    // Spawn particles
-    _particles = [];
-    const count = weatherType === 'sand' ? 60 : weatherType === 'rain' ? 80 : 40;
-    for (let i = 0; i < count; i++) {
-      _particles.push(makeParticle(weatherType, color, _canvas.width, _canvas.height));
-    }
-
-    function loop() {
-      _ctx.clearRect(0, 0, _canvas.width, _canvas.height);
-      _particles.forEach((p, idx) => {
-        tickParticle(p, weatherType, _canvas.width, _canvas.height);
-        drawParticle(_ctx, p, weatherType, color);
+    // Spawn initial particles
+    for (let i = 0; i < 40; i++) {
+      _particles.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        vy: _current === 'rain' ? 6 + Math.random() * 4 : 1 + Math.random() * 2,
+        vx: _current === 'sand' ? 3 + Math.random() * 2 : (_current === 'rain' ? 1 : 0),
+        size: _current === 'rain' ? 2 : 3 + Math.random() * 3,
+        alpha: 0.4 + Math.random() * 0.4,
       });
-      _raf = requestAnimationFrame(loop);
     }
-    _raf = requestAnimationFrame(loop);
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+      _particles.forEach(p => {
+        ctx.globalAlpha = p.alpha;
+        ctx.fillStyle   = color;
+        if (_current === 'rain') {
+          ctx.fillRect(p.x, p.y, 1, p.size * 4);
+        } else {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size / 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        p.x += p.vx; p.y += p.vy;
+        if (p.y > H) { p.y = -10; p.x = Math.random() * W; }
+        if (p.x > W) { p.x = 0; }
+      });
+      ctx.globalAlpha = 1;
+      _animFrame = requestAnimationFrame(draw);
+    }
+    draw();
   }
 
   function stopParticles() {
-    if (_raf)    { cancelAnimationFrame(_raf); _raf = null; }
-    if (_canvas) { _canvas.remove(); _canvas = null; _ctx = null; }
-    _particles = [];
+    if (_animFrame) { cancelAnimationFrame(_animFrame); _animFrame = null; }
+    _particles.length = 0;
   }
 
-  function makeParticle(type, color, w, h) {
-    return {
-      x:   Math.random() * w,
-      y:   Math.random() * h - h,
-      spd: 1 + Math.random() * 3,
-      len: type === 'rain' ? 8 + Math.random() * 10 : 3 + Math.random() * 4,
-      ang: type === 'rain' ? 0.3 : type === 'sand' ? 0.1 : 0,
-      sz:  1 + Math.random() * 1.5,
-      alpha: 0.4 + Math.random() * 0.5,
-    };
-  }
-
-  function tickParticle(p, type, w, h) {
-    if (type === 'rain') {
-      p.x += Math.sin(p.ang) * p.spd * 0.8;
-      p.y += p.spd * 4;
-    } else if (type === 'sand') {
-      p.x += p.spd * 2;
-      p.y += Math.sin(p.ang) * p.spd * 0.3;
-      p.ang += 0.05;
-    } else {
-      p.x += Math.sin(p.ang) * p.spd * 0.5;
-      p.y += p.spd * 2;
-    }
-    // Wrap
-    if (p.y > h + 10) { p.y = -10; p.x = Math.random() * w; }
-    if (p.x > w + 10) p.x = -10;
-    if (p.x < -10)    p.x = w + 10;
-  }
-
-  function drawParticle(ctx, p, type, color) {
-    ctx.save();
-    ctx.globalAlpha = p.alpha;
-    ctx.strokeStyle = color;
-    ctx.fillStyle   = color;
-
-    if (type === 'rain') {
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.lineTo(p.x + Math.sin(p.ang) * p.len * 0.5, p.y + p.len);
-      ctx.stroke();
-    } else if (type === 'sun') {
-      // Tiny sparkles
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.sz, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.sz, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-  }
+  // ── Backwards-compatibility aliases ───────────
+  // engine.js and main.js call these older names
+  function reset()               { return clear(); }
+  function tick(allPkmn)         { return applyEndOfTurn(allPkmn); }
 
   return {
-    TYPES, set, clear, reset, get, turnsLeft, isActive,
-    tick, getMoveMult, bypassAccuracy, updateUI
+    TYPES, isTerrain,
+    set, clear, reset, suppress, current, turnsLeft,
+    applyEndOfTurn, tick,
+    getMoveMult, getAccuracyMult,
+    getDefBonus, blocksSleepForGrounded, blocksDragonForGrounded,
+    halvesDamageForGrounded,
+    startParticles, stopParticles,
+    // Backwards compat aliases
+    bypassAccuracy: getAccuracyMult,
   };
 
 })();
