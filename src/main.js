@@ -50,7 +50,8 @@ const Battle = (() => {
   let enemyActive  = 0;
   let isTowerMode  = false;
   let cpuTier      = 1;
-  let busy         = false; // prevents double-clicks during animations
+  let busy         = false;
+  let _battleTurn  = 0;
 
   // ─── Story mode state ─────────────────────────
   let _storyOnWin  = null;
@@ -77,8 +78,7 @@ const Battle = (() => {
     isTowerMode  = opts.tower || false;
     cpuTier      = opts.cpuTier || 1;
     busy         = false;
-
-    // Story Mode hooks
+    _battleTurn  = 0;
     _storyOnWin  = opts.onWin  || null;
     _storyOnLose = opts.onLose || null;
     _storyNPC    = opts.storyNPC || null;
@@ -222,6 +222,7 @@ const Battle = (() => {
     }
 
     // Run the turn through the engine
+    _battleTurn++;
     const events = BattleEngine.executeTurn(player, enemy, playerMove, enemyMove);
     BattleEngine.resetRng(); // restore native Math.random for non-engine code
 
@@ -749,6 +750,96 @@ const Battle = (() => {
     const cb = _storyOnLose; _storyOnWin = null; _storyOnLose = null; if (cb) cb();
   }
 
+  async function throwBall(ballKey) {
+    const wild   = Battle.getEnemy();
+    const item   = Items.ITEM_DATA[ballKey];
+    if (!wild || !item) return;
+
+    busy = true;
+    const ballName = item.name;
+
+    // Throw animation — bounce ball sprite over enemy
+    setMessage(`${Battle.getPlayer().name} threw a ${ballName}!`);
+    SoundSystem.play('itemUse');
+
+    // Show a bouncing ball overlay on the enemy sprite
+    const enemyWrap = document.querySelector('.ba-enemy-sprite-wrap');
+    const ballEl    = document.createElement('div');
+    ballEl.className = 'catch-ball-anim';
+    ballEl.textContent = '🔴';
+    if (enemyWrap) enemyWrap.appendChild(ballEl);
+
+    await BattleAnimations.wait(600);
+
+    // Hide enemy sprite (ball sucks it in)
+    const enemySprite = document.getElementById('enemy-sprite');
+    if (enemySprite) enemySprite.style.opacity = '0';
+    await BattleAnimations.wait(300);
+    if (ballEl.parentNode) ballEl.parentNode.removeChild(ballEl);
+
+    // Calculate catch result
+    const result = Items.tryCatch(ballKey, wild, _battleTurn);
+
+    // Shake animation (1 shake per success)
+    for (let s = 0; s < result.shakes; s++) {
+      setMessage('...');
+      await BattleAnimations.wait(500);
+    }
+
+    if (result.caught) {
+      // SUCCESS
+      SoundSystem.play('victory');
+      setMessage(result.message);
+      BattleLog.log(`Caught ${wild.name}!`, 'log-system');
+      await BattleAnimations.wait(1200);
+
+      // Unlock Pokémon and add to story party if in story mode
+      const wasNew = SaveSystem.unlockPokemon(wild.key);
+      if (Battle.isStoryBattle() || Battle.isWild) {
+        const added = StorySave.addToParty(wild.key, wild.level);
+        if (added) {
+          setMessage(`${wild.name} joined your party!`);
+          await BattleAnimations.wait(1200);
+        } else if (StorySave.getParty().length >= 6) {
+          setMessage(`${wild.name} was sent to the PC!`);
+          await BattleAnimations.wait(1200);
+        }
+      }
+      if (wasNew) TeamBuilder.renderCollection?.();
+
+      // End battle via victory path
+      busy = false;
+      if (_storyOnWin) {
+        const cb = _storyOnWin;
+        _storyOnWin  = null;
+        _storyOnLose = null;
+        cb();
+      } else {
+        Screen.show('screen-quickbattle');
+      }
+    } else {
+      // FAILED — enemy breaks free
+      if (enemySprite) enemySprite.style.opacity = '1';
+      setMessage(result.message);
+      await BattleAnimations.wait(1000);
+
+      // Enemy uses its turn
+      const enemy  = Battle.getEnemy();
+      const player = Battle.getPlayer();
+      if (enemy && player && !BattleEngine.hasFainted(enemy)) {
+        const cpuMove = CPU.chooseMove(enemy, player, cpuTier);
+        const dummyMove = { name:'(threw ball)', power:0, accuracy:100, pp:99, currentPP:99, priority:-7, type:'normal', category:'status' };
+        const events = BattleEngine.executeTurn(player, enemy, dummyMove, cpuMove);
+        await processEvents(events);
+        if (BattleEngine.isTeamDefeated(playerTeam)) { await defeat(); return; }
+      }
+
+      busy = false;
+      showActions();
+      setMessage(`What will ${Battle.getPlayer()?.name} do?`);
+    }
+  }
+
   return {
     start,
     playerChoosesMove,
@@ -761,6 +852,8 @@ const Battle = (() => {
     fireStoryWin,
     fireStoryLose,
     get isTower()    { return isTowerMode; },
+    get isWild()     { return _isWild; },
+    throwBall,
     get playerTeam() { return playerTeam; },
     get enemyTeam()  { return enemyTeam;  }
   };
@@ -914,6 +1007,19 @@ const BattleUI = (() => {
     _pendingItemKey = null;
 
     Items.renderBagUI(listEl, (itemKey) => {
+      // Pokéballs in a wild battle → throw at wild Pokémon directly
+      const item = Items.ITEM_DATA[itemKey];
+      if (Battle.isWild && item?.category === 'pokeball') {
+        showSection('none');
+        Battle.throwBall(itemKey);
+        return;
+      }
+      // Pokéballs in non-wild battles can't be used
+      if (!Battle.isWild && item?.category === 'pokeball') {
+        setMessage("You can't catch a trainer's Pokémon!");
+        setTimeout(() => showActions(), 1400);
+        return;
+      }
       _pendingItemKey = itemKey;
       showBagTarget(itemKey);
     }, Battle.playerTeam, Battle.getPlayer());

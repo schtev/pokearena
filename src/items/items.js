@@ -791,6 +791,116 @@ const Items = (() => {
   function getAllItems() { return ITEM_DATA; }
   function getItem(key) { return ITEM_DATA[key] || null; }
 
+  /**
+   * Attempt to catch a wild Pokémon using a ball.
+   * Returns { caught: bool, shakes: 0-3, message: string }
+   * Uses the Gen 3/4 catch formula.
+   * @param {string} ballKey  - item key e.g. 'pokeball'
+   * @param {object} wildPkmn - live battle instance of the wild Pokémon
+   * @param {number} turnNum  - current battle turn (for timer ball etc.)
+   */
+  function tryCatch(ballKey, wildPkmn, turnNum = 1) {
+    const item = ITEM_DATA[ballKey];
+    if (!item || item.category !== 'pokeball') {
+      return { caught: false, shakes: 0, message: 'That\'s not a Poké Ball!' };
+    }
+    if ((SaveSystem.getItemCount(ballKey) || 0) <= 0) {
+      return { caught: false, shakes: 0, message: `No ${item.name}s left!` };
+    }
+
+    // Consume the ball
+    SaveSystem.useItem(ballKey);
+
+    // Master Ball: guaranteed catch
+    const eff = item.effect;
+    if (eff.rate >= 9999) {
+      return { caught: true, shakes: 3, message: `Gotcha! ${wildPkmn.name} was caught!` };
+    }
+
+    // Base catch rate (use 45 as default — common Pokémon value)
+    const baseCatchRate = POKEMON_DATA[wildPkmn.key]?.catchRate ?? 45;
+
+    // Ball multiplier
+    let ballRate = eff.rate || 1;
+    // Type bonus (Net Ball)
+    if (eff.typeBonus && wildPkmn.types?.some(t => eff.typeBonus.includes(t))) ballRate = 3;
+    // Quick Ball bonus (first turn)
+    if (ballKey === 'quickball' && turnNum === 1) ballRate = 5;
+    // Timer Ball scales with turns
+    if (ballKey === 'timerball') ballRate = Math.min(4, 1 + Math.floor(turnNum / 10));
+    // Nest Ball — better for lower level
+    if (ballKey === 'nestball') ballRate = Math.max(1, Math.floor((41 - wildPkmn.level) / 10));
+    // Repeat Ball — better if already owned
+    if (ballKey === 'repeatball' && SaveSystem.getUnlocked().includes(wildPkmn.key)) ballRate = 3;
+
+    // HP factor: lower HP = higher catch chance
+    const hpFactor = (3 * wildPkmn.maxHP - 2 * wildPkmn.currentHP) / (3 * wildPkmn.maxHP);
+
+    // Status bonus
+    const statusBonus = wildPkmn.status === 'asleep' || wildPkmn.status === 'frozen' ? 2
+                      : wildPkmn.status ? 1.5 : 1;
+
+    // Final catch value (0–255 scale)
+    const catchVal = Math.floor(baseCatchRate * ballRate * hpFactor * statusBonus);
+    const threshold = Math.floor(65536 / Math.sqrt(Math.sqrt(255 / catchVal)));
+
+    // 4 shake checks
+    let shakes = 0;
+    for (let i = 0; i < 4; i++) {
+      if (Math.floor(Math.random() * 65536) < threshold) shakes++;
+      else break;
+    }
+
+    const caught = shakes === 4;
+    let message = caught
+      ? `Gotcha! ${wildPkmn.name} was caught!`
+      : shakes === 3 ? `Oh no! ${wildPkmn.name} broke free!`
+      : shakes === 2 ? `Shoot! It was so close too!`
+      : shakes === 1 ? `Aww! It appeared to be caught!`
+      : `${wildPkmn.name} broke free!`;
+
+    return { caught, shakes, message };
+  }
+
+  /** Pokémart shop catalogue — what each town sells */
+  const MART_CATALOGUES = {
+    default: [
+      { key: 'pokeball',   price: 200 },
+      { key: 'potion',     price: 300 },
+      { key: 'antidote',   price: 100 },
+    ],
+    pewterCity: [
+      { key: 'pokeball',   price: 200 },
+      { key: 'greatball',  price: 600 },
+      { key: 'potion',     price: 300 },
+      { key: 'superPotion',price: 700 },
+      { key: 'antidote',   price: 100 },
+      { key: 'paralyzeHeal', price: 200 },
+    ],
+    ceruleanCity: [
+      { key: 'pokeball',   price: 200 },
+      { key: 'greatball',  price: 600 },
+      { key: 'ultraball',  price: 1200 },
+      { key: 'superPotion',price: 700 },
+      { key: 'hyperPotion',price: 1200 },
+      { key: 'antidote',   price: 100 },
+      { key: 'fullHeal',   price: 600 },
+    ],
+    vermilionCity: [
+      { key: 'pokeball',   price: 200 },
+      { key: 'greatball',  price: 600 },
+      { key: 'ultraball',  price: 1200 },
+      { key: 'hyperPotion',price: 1200 },
+      { key: 'fullRestore',price: 3000 },
+      { key: 'revive',     price: 1500 },
+      { key: 'fullHeal',   price: 600 },
+    ],
+  };
+
+  function getMartCatalogue(mapId) {
+    return MART_CATALOGUES[mapId] || MART_CATALOGUES.default;
+  }
+
   return {
     ITEM_DATA,
     CATEGORY_LABELS,
@@ -798,6 +908,8 @@ const Items = (() => {
     renderBagUI,
     getAllItems,
     getItem,
+    tryCatch,
+    getMartCatalogue,
   };
 
 })();

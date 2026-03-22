@@ -1223,6 +1223,11 @@ const Overworld = (() => {
       return;
     }
 
+    if (npc.isMart) {
+      _startDialogue(npc.name, subLines, () => _openMart(npc.martMap || currentMap.id), portrait);
+      return;
+    }
+
     if (npc.isGymLeader && !isDefeated) {
       _startDialogue(npc.name, subLines, () => _startGymBattle(npc), portrait);
       return;
@@ -1500,15 +1505,195 @@ const Overworld = (() => {
   // ─── Healing ──────────────────────────────────
 
   function _healTeam() {
-    // Story party heals between battles — createPokemonInstance always
-    // creates at full HP, so healing is automatic on next battle.
-    // We just need to show the flavour dialogue here.
     const party = StorySave.getParty();
     if (party.length === 0) return;
     _startDialogue('Nurse Joy', [
       "We restored your Pokémon to full health!",
       "We hope to see you again!",
     ]);
+  }
+
+  // ─── Pokémart ─────────────────────────────────
+
+  function _openMart(mapId) {
+    const catalogue = Items.getMartCatalogue(mapId);
+
+    // Inject overlay if not present
+    let overlay = document.getElementById('mart-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'mart-overlay';
+      document.body.appendChild(overlay);
+      // Inject styles once
+      const style = document.createElement('style');
+      style.id = 'mart-styles';
+      style.textContent = `
+        #mart-overlay {
+          position: fixed; inset: 0; z-index: 300;
+          background: rgba(0,0,0,0.75);
+          display: flex; align-items: center; justify-content: center;
+          backdrop-filter: blur(4px);
+          animation: martFadeIn 0.2s ease;
+        }
+        @keyframes martFadeIn { from { opacity:0; } to { opacity:1; } }
+        #mart-overlay.hidden { display: none !important; }
+        #mart-panel {
+          background: var(--bg-panel);
+          border: 3px solid var(--accent-yellow);
+          border-radius: 18px;
+          width: min(420px, 94vw);
+          max-height: 80vh;
+          display: flex; flex-direction: column;
+          overflow: hidden;
+          box-shadow: 0 8px 48px rgba(0,0,0,0.8), 0 0 30px rgba(245,197,24,0.15);
+        }
+        #mart-header {
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 14px 18px;
+          border-bottom: 2px solid var(--border);
+          flex-shrink: 0;
+        }
+        #mart-title {
+          font-family: var(--font-pixel); font-size: 11px;
+          color: var(--accent-yellow);
+          text-shadow: 0 0 12px rgba(245,197,24,0.4);
+        }
+        #mart-money {
+          font-family: var(--font-pixel); font-size: 10px;
+          color: var(--accent-green);
+        }
+        #mart-close {
+          background: none; border: 2px solid var(--border); border-radius: 6px;
+          color: var(--text-muted); font-size: 12px; padding: 4px 10px; cursor: pointer;
+          font-family: var(--font-pixel);
+          transition: border-color .15s, color .15s;
+        }
+        #mart-close:hover { border-color: var(--accent-red); color: var(--accent-red); }
+        #mart-items { overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+        .mart-item {
+          display: grid; grid-template-columns: 36px 1fr auto auto;
+          align-items: center; gap: 10px;
+          background: var(--bg-card); border: 2px solid var(--border);
+          border-radius: 10px; padding: 10px 12px; cursor: default;
+        }
+        .mart-item:hover { border-color: var(--accent-blue); }
+        .mart-item-icon { font-size: 22px; text-align: center; }
+        .mart-item-info { display: flex; flex-direction: column; gap: 2px; }
+        .mart-item-name { font-family: var(--font-pixel); font-size: 9px; color: var(--text-primary); }
+        .mart-item-desc { font-size: 10px; color: var(--text-muted); }
+        .mart-item-price { font-family: var(--font-pixel); font-size: 9px; color: var(--accent-yellow); white-space: nowrap; }
+        .mart-qty-row { display: flex; align-items: center; gap: 5px; }
+        .mart-qty-btn {
+          width: 24px; height: 24px; border-radius: 6px;
+          border: 1.5px solid var(--border); background: var(--bg-dark);
+          color: var(--text-primary); font-size: 14px; cursor: pointer;
+          display: flex; align-items: center; justify-content: center;
+          transition: border-color .12s, background .12s;
+        }
+        .mart-qty-btn:hover { border-color: var(--accent-blue); background: var(--bg-card); }
+        .mart-qty { font-family: var(--font-pixel); font-size: 10px; min-width: 20px; text-align: center; color: var(--text-primary); }
+        #mart-footer {
+          border-top: 2px solid var(--border); padding: 12px 16px;
+          display: flex; gap: 10px; flex-shrink: 0;
+        }
+        #mart-buy-btn {
+          flex: 1; padding: 12px; font-family: var(--font-pixel); font-size: 10px;
+          background: linear-gradient(135deg,#1a3a20,#0e2816);
+          border: 2px solid var(--accent-green); color: var(--accent-green);
+          border-radius: 10px; cursor: pointer;
+          box-shadow: 0 3px 0 #143010, 0 0 16px rgba(61,220,132,.2);
+          transition: transform .1s, box-shadow .1s;
+        }
+        #mart-buy-btn:hover { transform: translateY(-2px); box-shadow: 0 5px 0 #143010, 0 0 28px rgba(61,220,132,.4); }
+        #mart-buy-btn:active { transform: translateY(1px); }
+        #mart-toast {
+          font-family: var(--font-pixel); font-size: 9px; color: var(--text-muted);
+          display: flex; align-items: center;
+          min-height: 20px; padding: 0 4px;
+        }
+      `;
+      if (!document.getElementById('mart-styles')) document.head.appendChild(style);
+    }
+
+    // Build quantities map
+    const quantities = {};
+    catalogue.forEach(({ key }) => { quantities[key] = 1; });
+
+    function renderMart() {
+      const money = StorySave.getMoney();
+      overlay.innerHTML = `
+        <div id="mart-panel">
+          <div id="mart-header">
+            <span id="mart-title">🏪 POKÉMART</span>
+            <span id="mart-money">₽${money.toLocaleString()}</span>
+            <button id="mart-close" onclick="document.getElementById('mart-overlay').classList.add('hidden')">✕ Exit</button>
+          </div>
+          <div id="mart-items">
+            ${catalogue.map(({ key, price }) => {
+              const item = Items.ITEM_DATA[key];
+              if (!item) return '';
+              const qty  = quantities[key];
+              const total = price * qty;
+              const icon  = item.sprite ? `<img src="${item.sprite}" style="width:28px;height:28px;image-rendering:pixelated" onerror="this.outerHTML='🎒'">` : '🎒';
+              return `<div class="mart-item" id="mart-item-${key}">
+                <div class="mart-item-icon">${icon}</div>
+                <div class="mart-item-info">
+                  <span class="mart-item-name">${item.name}</span>
+                  <span class="mart-item-desc">${item.desc}</span>
+                </div>
+                <span class="mart-item-price">₽${price}</span>
+                <div class="mart-qty-row">
+                  <button class="mart-qty-btn" onclick="martQty('${key}',-1)">−</button>
+                  <span class="mart-qty" id="martqty-${key}">${qty}</span>
+                  <button class="mart-qty-btn" onclick="martQty('${key}',1)">+</button>
+                </div>
+              </div>`;
+            }).join('')}
+          </div>
+          <div id="mart-footer">
+            <span id="mart-toast">Choose items to buy</span>
+            <button id="mart-buy-btn" onclick="martBuy()">🛒 Buy Selected</button>
+          </div>
+        </div>`;
+      overlay.classList.remove('hidden');
+    }
+
+    // Expose helpers to global scope temporarily
+    window.martQty = function(key, delta) {
+      quantities[key] = Math.max(1, Math.min(99, (quantities[key] || 1) + delta));
+      const el = document.getElementById(`martqty-${key}`);
+      if (el) el.textContent = quantities[key];
+    };
+
+    window.martBuy = function() {
+      const toast = document.getElementById('mart-toast');
+      let totalCost = 0;
+      catalogue.forEach(({ key, price }) => {
+        totalCost += price * (quantities[key] || 1);
+      });
+      if (totalCost === 0) return;
+      if (!StorySave.spendMoney(totalCost)) {
+        if (toast) toast.textContent = `Not enough money! (need ₽${totalCost})`;
+        return;
+      }
+      catalogue.forEach(({ key }) => {
+        const qty = quantities[key] || 1;
+        SaveSystem.addItem(key, qty);
+      });
+      if (toast) toast.textContent = `Bought! ₽${totalCost} spent.`;
+      // Update money display
+      const moneyEl = document.getElementById('mart-money');
+      if (moneyEl) moneyEl.textContent = `₽${StorySave.getMoney().toLocaleString()}`;
+      // Reset quantities
+      catalogue.forEach(({ key }) => { quantities[key] = 1; });
+      catalogue.forEach(({ key }) => {
+        const el = document.getElementById(`martqty-${key}`);
+        if (el) el.textContent = 1;
+      });
+      SoundSystem.play('itemUse');
+    };
+
+    renderMart();
   }
 
   // ─── HUD ──────────────────────────────────────

@@ -258,7 +258,17 @@ const MapData = (() => {
             "Don't fall behind!",
           ],
           defeatedDialogue: ["Still here? Keep moving, then."],
-        },
+        },,
+        {
+          id: 'clerk_viridian',
+          name: 'Mart Clerk',
+          x: 7, y: 3,
+          sprite: 'youngster',
+          facing: 'down',
+          isMart: true,
+          martMap: 'default',
+          dialogue: ['Welcome to the PokéMart!', 'We carry all the essentials for your journey.'],
+        }
       ],
       exits: [
         { x: 3, y: 0, toMap: 'route1',   toX: 3, toY: 14, label: '← Route 1' },
@@ -461,7 +471,17 @@ const MapData = (() => {
             "Grass and Water types really give him trouble though.",
             "Good luck, kid.",
           ],
-        },
+        },,
+        {
+          id: 'clerk_pewter',
+          name: 'Mart Clerk',
+          x: 7, y: 3,
+          sprite: 'youngster',
+          facing: 'down',
+          isMart: true,
+          martMap: 'pewterCity',
+          dialogue: ['Welcome to the PokéMart!', 'We have Great Balls in stock!'],
+        }
       ],
       exits: [
         { x: 3, y: 0, toMap: 'viridianForest', toX: 3, toY: 12, label: '← Viridian Forest' },
@@ -692,7 +712,17 @@ const MapData = (() => {
             "I already won my Cascade Badge, obviously.",
           ],
           defeatedDialogue: ["Hmph. Beat you next time."],
-        },
+        },,
+        {
+          id: 'clerk_cerulean',
+          name: 'Mart Clerk',
+          x: 7, y: 3,
+          sprite: 'youngster',
+          facing: 'down',
+          isMart: true,
+          martMap: 'ceruleanCity',
+          dialogue: ['Welcome to the PokéMart!', 'We even stock Ultra Balls!'],
+        }
       ],
       exits: [
         { x: 4, y: 0, toMap: 'mtMoon',  toX: 4, toY: 12, label: '← Mt. Moon' },

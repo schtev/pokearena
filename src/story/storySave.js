@@ -168,6 +168,7 @@ const StorySave = (() => {
     s.flags        = {};
     s.party        = [{ key: starterKey, level: 5, xp: 0 }];
     SaveSystem.unlockPokemon(starterKey);
+    SaveSystem.addItem('pokeball', 10);   // start with 10 Poké Balls
     _flush();
   }
 
