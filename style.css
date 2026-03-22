@@ -65,7 +65,7 @@ html, body {
   transition: opacity 0.25s ease, transform 0.25s ease;
 }
 .screen.active {
-  display: flex !important;
+  display: flex;
   opacity: 1;
   transform: translateY(0);
 }
@@ -542,10 +542,9 @@ html, body {
    BATTLE SCREEN
 ═══════════════════════════════════════════════════ */
 #screen-battle {
-  display: none;
   flex-direction: column;
-  height: 100%;         /* fill the screen container */
-  overflow: hidden;     /* prevent any scroll inside the battle screen */
+  height: 100%;
+  overflow: hidden;
 }
 
 /* ═══════════════════════════════════════════════════
@@ -4253,7 +4252,6 @@ html, body {
 ═══════════════════════════════════════════════════ */
 #screen-quickbattle {
   overflow: hidden;
-  display: flex;
   flex-direction: column;
 }
 
