@@ -125,8 +125,9 @@ const Tower = (() => {
   // ─── Floor generation ─────────────────────────
 
   function getFloorType(n) {
-    if (n % 10 === 0) return FLOOR_TYPE.BOSS;
-    if (n % 5  === 0) return FLOOR_TYPE.ELITE;
+    if (n % 50 === 0) return FLOOR_TYPE.BOSS;      // major boss every 50 floors
+    if (n % 10 === 0) return FLOOR_TYPE.ELITE;     // mini-boss every 10
+    if (n % 5  === 0) return FLOOR_TYPE.TRAINER;   // trainer every 5
     if (n % 3  === 0) return FLOOR_TYPE.TRAINER;
     return FLOOR_TYPE.WILD;
   }
@@ -136,45 +137,88 @@ const Tower = (() => {
     return pool[Math.floor(Math.random() * pool.length)];
   }
 
+  const START_LEVEL = 10;  // All runs begin at this level
+
   function generateEnemyTeam(floorNumber) {
     const type = getFloorType(floorNumber);
     const tier = Math.floor(floorNumber / 10);
 
-    // No level cap — scales indefinitely
-    const baseLevel  = Math.floor(10 + floorNumber * 1.5);
-    const levelRange = 3;
+    // Enemy level is relative to the player's current max party level.
+    // This means enemies stay fair regardless of how fast the player levels up.
+    const partyLevel = runParty.length > 0
+      ? Math.max(...runParty.map(m => m.level))
+      : START_LEVEL;
+
+    // How many levels ahead the enemies are — grows slowly with floor
+    const leadAhead = floorNumber < 10  ? 1
+                    : floorNumber < 50  ? 3
+                    : floorNumber < 100 ? 6
+                    : 10;
+
+    // Bosses are extra hard
+    const bossBonus = type === FLOOR_TYPE.BOSS  ? 8
+                    : type === FLOOR_TYPE.ELITE ? 3
+                    : 0;
+
+    const baseLevel  = Math.max(START_LEVEL, partyLevel + leadAhead + bossBonus);
+    const levelRange = 2;
 
     let teamSize;
     switch (type) {
       case FLOOR_TYPE.BOSS:    teamSize = 6; break;
-      case FLOOR_TYPE.ELITE:   teamSize = 4; break;
-      case FLOOR_TYPE.TRAINER: teamSize = Math.min(3, 1 + Math.floor(floorNumber / 5)); break;
+      case FLOOR_TYPE.ELITE:   teamSize = Math.min(4, 2 + Math.floor(floorNumber / 20)); break;
+      case FLOOR_TYPE.TRAINER: teamSize = Math.min(3, 1 + Math.floor(floorNumber / 10)); break;
       default:                 teamSize = 1;
     }
 
     const team = [];
     for (let i = 0; i < teamSize; i++) {
       const key   = randomEnemyKey(tier);
-      const level = Math.max(5, baseLevel + Math.floor(Math.random() * levelRange * 2) - levelRange);
+      const level = Math.max(START_LEVEL, baseLevel + Math.floor(Math.random() * levelRange * 2) - levelRange);
       const pkmn  = createPokemonInstance(key, level);
       if (pkmn) team.push(pkmn);
     }
     return team;
   }
 
+  // Weather that can randomly appear in tower floors
+  const TOWER_WEATHERS = ['none','none','none','sun','rain','sand','hail','snow'];
+  // More weather variety on higher floors
+  const TOWER_WEATHERS_HARD = ['sun','rain','sand','hail','snow','electricterrain','mistyterrain','grassyterrain'];
+
+  function _rollFloorWeather(floorNumber) {
+    // Before floor 10: no weather. Floor 10-49: 30% chance. 50+: 60% chance.
+    if (floorNumber < 10) return null;
+    const chance = floorNumber < 50 ? 0.3 : 0.6;
+    if (Math.random() > chance) return null;
+    const pool = floorNumber >= 50 ? TOWER_WEATHERS_HARD : TOWER_WEATHERS;
+    const w    = pool[Math.floor(Math.random() * pool.length)];
+    return w === 'none' ? null : w;
+  }
+
   function generateFloor(floorNumber) {
-    const type      = getFloorType(floorNumber);
-    const enemyTeam = generateEnemyTeam(floorNumber);
-    const egg       = isEggFloor(floorNumber) ? rollEgg() : null;
+    const type        = getFloorType(floorNumber);
+    const enemyTeam   = generateEnemyTeam(floorNumber);
+    const egg         = isEggFloor(floorNumber) ? rollEgg() : null;
+    const hasShop     = isShopFloor(floorNumber);
+    const weather     = _rollFloorWeather(floorNumber);
 
     return {
-      floorNumber,
-      type,
-      enemyTeam,
-      reward: null,           // old unlock system removed
-      egg,                    // null | { rarity, rarityData, key, name }
+      floorNumber, type, enemyTeam,
+      reward: null,
+      egg,
+      hasShop,
+      weather,   // string key or null — set at battle start
       trainerName: generateTrainerName(type, floorNumber),
     };
+  }
+
+  // ── Shop floors ──────────────────────────────────
+  const SHOP_INTERVAL = 5;
+
+  function isShopFloor(n) {
+    // Shop on every 5th floor, but NOT if it's also an egg floor (avoid overlap)
+    return n > 0 && n % SHOP_INTERVAL === 0 && !isEggFloor(n);
   }
 
   // ─── Egg system ───────────────────────────────
@@ -228,9 +272,9 @@ const Tower = (() => {
     isActive     = true;
     pendingEgg   = null;
 
-    const leadLevel = SaveSystem.getTowerLevel(leadKey) || 5;
+    // Always start fresh at START_LEVEL — never affected by previous runs
     const _xpBase = lv => Math.pow(Math.max(1, lv), 3);
-    runParty = [{ key: leadKey, level: leadLevel, xp: _xpBase(leadLevel) }];
+    runParty = [{ key: leadKey, level: START_LEVEL, xp: _xpBase(START_LEVEL) }];
 
     _saveRunParty();
     SaveSystem.setTowerRun(1);
@@ -263,8 +307,7 @@ const Tower = (() => {
         member.level = inst.level || member.level;
         const _xpBase3 = lv => Math.pow(Math.max(1, lv), 3);
         member.xp    = inst.xp !== undefined ? inst.xp : _xpBase3(member.level);
-        // Persist the lead's level so it carries across sessions
-        SaveSystem.setTowerLevel(key, member.level);
+        // Do NOT write back to global pokemonLevels — runs stay independent.
       }
     }
     _saveRunParty();
@@ -277,9 +320,10 @@ const Tower = (() => {
    */
   function addHatchedToParty(key) {
     if (runParty.length >= 6) return false;
-    const level = Math.max(5, Math.floor(currentFloor * 0.8));  // hatches at ~80% of current floor
+    // Hatch at the same level as the party lead (not floor-based, not saved level)
+    const hatchLevel = Math.max(START_LEVEL, runParty[0]?.level || START_LEVEL);
     const _xpBase2 = lv => Math.pow(Math.max(1, lv), 3);
-    runParty.push({ key, level, xp: _xpBase2(level) });
+    runParty.push({ key, level: hatchLevel, xp: _xpBase2(hatchLevel) });
     _saveRunParty();
     return true;
   }
@@ -406,8 +450,12 @@ const Tower = (() => {
   ];
 
   function generateTrainerName(type, floor) {
-    if (type === FLOOR_TYPE.BOSS)
-      return `${BOSS_NAMES[Math.floor(floor/10) % BOSS_NAMES.length]} (Floor ${floor})`;
+    if (type === FLOOR_TYPE.BOSS) {
+      const tag = (floor % 100 === 0) ? '💀 APEX BOSS'
+                : (floor % 50  === 0) ? '👑 FLOOR BOSS'
+                : '⚔️ Mini Boss';
+      return `${tag} — ${BOSS_NAMES[Math.floor(floor/50) % BOSS_NAMES.length]} (Floor ${floor})`;
+    }
     if (type === FLOOR_TYPE.ELITE)
       return `Elite ${TRAINER_NAMES[Math.floor(Math.random()*TRAINER_NAMES.length)]}`;
     if (type === FLOOR_TYPE.WILD) return 'Wild Battle';
@@ -425,8 +473,8 @@ const Tower = (() => {
       const resumeBtn   = document.getElementById('tower-resume-btn');
       const resumeLabel = document.getElementById('tower-resume-floor');
       const enterBtn    = document.getElementById('tower-enter-btn');
-      if (resumeBtn)   { resumeBtn.style.display = 'block'; resumeBtn.classList.remove('hidden'); }
-      if (enterBtn)    enterBtn.style.display = 'none';
+      if (resumeBtn)   { resumeBtn.classList.remove('hidden'); }
+      if (enterBtn)    if (enterBtn) enterBtn.closest('.tower-action-area, #tower-lead-section')?.classList.add('hidden');
       if (resumeLabel) resumeLabel.textContent = `Resume Floor ${savedFloor}`;
       updateHUD();
     }
@@ -456,7 +504,7 @@ const Tower = (() => {
                      onclick="Tower._selectSlot(${idx})">
           <div class="ts-header">
             <span class="ts-label">Slot ${idx+1}</span>
-            <span class="ts-floor">Floor ${slot.floor}</span>
+            <span class="ts-floor">🗼 Floor ${slot.floor}</span>
           </div>
           <div class="ts-party">${partyHtml}</div>
           <div class="ts-actions">
@@ -497,11 +545,11 @@ const Tower = (() => {
     if (slot && slot.active) {
       // Existing run — show resume button
       if (leadSection)  leadSection.classList.add('hidden');
-      if (resumeBtn)  { resumeBtn.classList.remove('hidden'); resumeBtn.style.display = 'block'; }
+      if (resumeBtn)  { resumeBtn.classList.remove('hidden'); }
       if (resumeLabel)  resumeLabel.textContent = `Resume Slot ${idx+1} — Floor ${slot.floor}`;
     } else {
       // Empty slot — show lead picker
-      if (resumeBtn)  { resumeBtn.classList.add('hidden'); resumeBtn.style.display = 'none'; }
+      if (resumeBtn)  { resumeBtn.classList.add('hidden'); }
       if (leadSection)  leadSection.classList.remove('hidden');
       _buildLeadPicker();
     }
@@ -517,7 +565,7 @@ const Tower = (() => {
       const leadSection = document.getElementById('tower-lead-section');
       const resumeBtn   = document.getElementById('tower-resume-btn');
       if (leadSection) leadSection.classList.add('hidden');
-      if (resumeBtn)   { resumeBtn.classList.add('hidden'); resumeBtn.style.display = 'none'; }
+      if (resumeBtn)   { resumeBtn.classList.add('hidden'); }
     }
   }
 
@@ -561,7 +609,7 @@ const Tower = (() => {
           ? '<p class="tower-lead-empty">No Pokémon match.</p>'
           : unlocked.map(key => {
               const d    = POKEMON_DATA[key];
-              const lv   = SaveSystem.getTowerLevel(key) || 5;
+              const lv   = START_LEVEL; // all new runs start at this level
               const sel  = currentLead === key ? ' tower-lead-selected' : '';
               const hasS = SaveSystem.hasShiny(key);
               return `<div class="tower-lead-slot${sel}" data-key="${key}"
@@ -572,7 +620,7 @@ const Tower = (() => {
                   ${d.types.map(t=>`<span class="type-badge type-${t}">${t}</span>`).join('')}
                 </div>
                 <span class="tower-lead-name">${d.name}</span>
-                <span class="tower-lead-lv">Lv ${lv}</span>
+                <span class="tower-lead-lv">Start Lv ${START_LEVEL}</span>
               </div>`;
             }).join('')
         }
@@ -628,7 +676,7 @@ const Tower = (() => {
     generateFloor,
     getCurrentFloor,
     getIsActive,
-    isEggFloor,
+    isEggFloor, isShopFloor,
     rollEgg,
     setPendingEgg,
     getPendingEgg,

@@ -61,17 +61,17 @@ const XPSystem = (() => {
    * @param {number} playerLevel  - Current player active Pokémon level
    */
   function calcReward(defeated, floorBonus = 1, playerLevel = 5) {
-    // Base: enemy level × 7 (roughly 7× faster than raw level³ grind)
-    const base = defeated.level * 7;
+    // Generous base: enemy level × 20 so players level up noticeably each fight
+    const base = defeated.level * 20;
 
-    // Level-difference multiplier: beating higher-level enemies gives bonus
-    const lvDiff   = (defeated.level - playerLevel) * 0.05;
-    const lvMult   = Math.max(0.5, Math.min(3.0, 1 + lvDiff));
+    // Level-difference multiplier: +10% per level above player, capped at 4×
+    const lvDiff = (defeated.level - playerLevel) * 0.1;
+    const lvMult = Math.max(0.6, Math.min(4.0, 1 + lvDiff));
 
-    // Floor bonus: gently increases with floor (1.0 at floor 1, 2.0 at floor 10)
-    const fBonus = Math.max(1, Math.min(3, floorBonus));
+    // Floor bonus: scales from 1× at floor 1 to 5× at floor 50+
+    const fBonus = Math.max(1, Math.min(5, floorBonus));
 
-    return Math.max(10, Math.floor(base * lvMult * fBonus));
+    return Math.max(30, Math.floor(base * lvMult * fBonus));
   }
 
   /**

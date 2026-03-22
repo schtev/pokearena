@@ -1,22 +1,12 @@
 // ═══════════════════════════════════════════════════
 //  src/battle/engine.js
-//  Core battle logic — damage, accuracy, effects,
-//  turn ordering, and win condition checks.
-//  This is the heart of the game.
+//  Core battle logic — fully wired abilities + weather.
 // ═══════════════════════════════════════════════════
 
 const BattleEngine = (() => {
 
-  // ─── Seeded RNG (Mulberry32) ───────────────────
-  // Used during executeTurn so both PvP clients produce
-  // identical results from the same seed.
-  let _rng = Math.random; // default: native random (CPU / local battles)
-
-  /**
-   * Seed the RNG for this turn.
-   * Call this before executeTurn in PvP mode.
-   * @param {number} seed  32-bit unsigned integer
-   */
+  // ─── Seeded RNG ────────────────────────────────
+  let _rng = Math.random;
   function seedRng(seed) {
     let s = seed >>> 0;
     _rng = function() {
@@ -26,327 +16,272 @@ const BattleEngine = (() => {
       return ((t ^ t >>> 14) >>> 0) / 4294967296;
     };
   }
-
-  /** Reset RNG back to native Math.random (for non-PvP battles). */
-  function resetRng() {
-    _rng = Math.random;
-  }
-
-  /** Generate a fresh random 32-bit seed to send to the opponent. */
-  function generateSeed() {
-    return (Math.random() * 0xFFFFFFFF) >>> 0;
-  }
+  function resetRng() { _rng = Math.random; }
+  function generateSeed() { return (Math.random() * 0xFFFFFFFF) >>> 0; }
 
   // ─── Stat stage multipliers ────────────────────
-  // Stages run from -6 to +6
   const STAGE_MULT = {
-    '-6': 2/8, '-5': 2/7, '-4': 2/6, '-3': 2/5,
-    '-2': 2/4, '-1': 2/3,  '0': 1,
-     '1': 3/2,  '2': 4/2,  '3': 5/2,
-     '4': 6/2,  '5': 7/2,  '6': 8/2
+    '-6':2/8,'-5':2/7,'-4':2/6,'-3':2/5,'-2':2/4,'-1':2/3,'0':1,
+    '1':3/2,'2':4/2,'3':5/2,'4':6/2,'5':7/2,'6':8/2
   };
-
-  /**
-   * Get the effective value of a stat after applying stages.
-   * @param {number} baseStat - The stat's base battle value
-   * @param {number} stage    - Current stage (-6 to +6)
-   */
-  function applyStage(baseStat, stage) {
-    return Math.floor(baseStat * (STAGE_MULT[String(stage)] || 1));
+  function applyStage(stat, stage) {
+    return Math.floor(stat * (STAGE_MULT[String(Math.max(-6,Math.min(6,stage||0)))] || 1));
   }
 
-  // ─── Damage Formula ────────────────────────────
-  /**
-   * Calculates raw damage dealt by attacker using move against defender.
-   * Based on Gen 5+ damage formula.
-   *
-   * @param {object} attacker - Pokémon instance
-   * @param {object} defender - Pokémon instance
-   * @param {object} move     - Move object from MOVES_DATA
-   * @returns {object} { damage, effectiveness, isCrit, effectivenessText }
-   */
+  // ─── Damage formula ────────────────────────────
   function calculateDamage(attacker, defender, move, extraMults = {}) {
-    if (move.power === 0) {
-      return { damage: 0, effectiveness: 1, isCrit: false, effectivenessText: '' };
-    }
+    if (!move.power) return { damage:0, effectiveness:1, isCrit:false, effectivenessText:'' };
 
     const level = attacker.level;
-
     let atkStat, defStat;
     if (move.category === 'physical') {
-      atkStat = applyStage(attacker.stats.attack,  attacker.stages.attack);
-      defStat = applyStage(defender.stats.defense, defender.stages.defense);
+      atkStat = applyStage(attacker.stats.attack,  attacker.stages.attack  || 0);
+      defStat = applyStage(defender.stats.defense, defender.stages.defense || 0);
     } else {
-      atkStat = applyStage(attacker.stats.spatk, attacker.stages.spatk);
-      defStat = applyStage(defender.stats.spdef, defender.stages.spdef);
+      atkStat = applyStage(attacker.stats.spatk, attacker.stages.spatk || 0);
+      defStat = applyStage(defender.stats.spdef, defender.stages.spdef || 0);
     }
 
-    let base = Math.floor(
-      (((2 * level / 5 + 2) * move.power * atkStat / defStat) / 50) + 2
-    );
+    // Weather defensive bonuses (Sand → Rock Sp.Def; Snow → Ice Def)
+    if (typeof Weather !== 'undefined') {
+      if (move.category === 'special')  defStat = Math.floor(defStat * (Weather.getDefBonus(defender,'spdef')  || 1));
+      if (move.category === 'physical') defStat = Math.floor(defStat * (Weather.getDefBonus(defender,'defense') || 1));
+    }
+
+    let base = Math.floor((((2*level/5+2) * move.power * atkStat / defStat) / 50) + 2);
 
     const stab          = attacker.types.includes(move.type) ? 1.5 : 1;
+    // Adaptability doubles STAB
+    const stabFinal     = (stab > 1 && extraMults.adaptability) ? stab * 1.33 : stab;
     const effectiveness = getTypeEffectiveness(move.type, defender.types);
-    const isCrit        = _rng() < 0.0625;
+    const isCrit        = _rng() < (0.0625 + ((attacker._critBoost || 0) * 0.125));
     const critMult      = isCrit ? 1.5 : 1;
     const random        = 0.85 + _rng() * 0.15;
     const burnMult      = (attacker.status === 'burned' && move.category === 'physical') ? 0.5 : 1;
 
-    // External multipliers from weather, abilities, held items
-    const weatherMult  = extraMults.weather  ?? 1;
-    const abilityMult  = extraMults.ability  ?? 1;
-    const heldMult     = extraMults.held     ?? 1;
-    const defAbilMult  = extraMults.defAbil  ?? 1;
+    const damage = Math.max(1, Math.floor(
+      base * stabFinal * effectiveness * critMult * random * burnMult
+      * (extraMults.weather  || 1)
+      * (extraMults.ability  || 1)
+      * (extraMults.held     || 1)
+      * (extraMults.defAbil  || 1)
+    ));
 
-    const damage = Math.max(1,
-      Math.floor(base * stab * effectiveness * critMult * random * burnMult
-        * weatherMult * abilityMult * heldMult * defAbilMult)
-    );
-
+    // Sturdy — survive from full HP
+    if (damage >= defender.currentHP && defender.currentHP >= defender.maxHP
+        && _abilityKey(defender) === 'sturdy') {
+      return { damage: defender.currentHP - 1, effectiveness, effectivenessText: getEffectivenessText(effectiveness), isCrit, sturdyProc: true };
+    }
+    // Focus Sash
+    if (damage >= defender.currentHP && defender.currentHP >= defender.maxHP
+        && defender._focusSash) {
+      defender._focusSash = false;
+      return { damage: defender.currentHP - 1, effectiveness, effectivenessText: getEffectivenessText(effectiveness), isCrit };
+    }
+    // Multiscale — halve if at full HP (already in defAbil but double-check)
     return { damage, effectiveness, effectivenessText: getEffectivenessText(effectiveness), isCrit };
   }
 
-  // ─── Accuracy Check ────────────────────────────
-  /**
-   * Returns true if the move hits.
-   * Accuracy can be modified by evasion/accuracy stages (future).
-   */
+  function _abilityKey(pkmn) {
+    if (typeof AbilitySystem === 'undefined') return null;
+    return AbilitySystem.POKEMON_ABILITIES?.[pkmn.key] || null;
+  }
+
+  // ─── Accuracy check ────────────────────────────
   function accuracyCheck(move, attacker, defender) {
-    if (move.accuracy >= 999) return true;   // "never misses"
-    if (defender.status === 'frozen' && move.type === 'fire') return true; // thaw
+    if (move.accuracy >= 999) return true;
+    if (defender.status === 'frozen' && move.type === 'fire') return true;
+    if (attacker.status === 'paralyzed' && _rng() < 0.25) return false;
+    if (attacker.status === 'asleep') return false;
 
-    // Status conditions that affect action
-    if (attacker.status === 'paralyzed' && _rng() < 0.25) return false; // can't move
-    if (attacker.status === 'asleep') return false;                       // can't move
+    // Weather accuracy modifier
+    const accMult = (typeof Weather !== 'undefined') ? (Weather.getAccuracyMult(move.id) || 1) : 1;
+    if (accMult >= 999) return true;  // auto-hit (Thunder in rain)
+    if (accMult <= 0)   return false;
 
-    return _rng() * 100 < move.accuracy;
+    // Stage-based accuracy/evasion
+    const accStage = attacker.stages?.accuracy || 0;
+    const evaStage = defender.stages?.evasion  || 0;
+    const netStage = Math.max(-6, Math.min(6, accStage - evaStage));
+    const stageMult = STAGE_MULT[String(netStage)] || 1;
+
+    return _rng() * 100 < move.accuracy * accMult * stageMult;
   }
 
-  // ─── Turn Order ────────────────────────────────
-  /**
-   * Determine which side moves first this turn.
-   * Priority moves > speed. Ties broken randomly.
-   *
-   * @param {object} p1Move - Move chosen by side 0
-   * @param {object} p2Move - Move chosen by side 1
-   * @param {object} p1     - Pokémon instance side 0
-   * @param {object} p2     - Pokémon instance side 1
-   * @returns {number[]} [firstIdx, secondIdx] where 0 = player, 1 = enemy
-   */
+  // ─── Turn order ────────────────────────────────
   function getTurnOrder(p1Move, p2Move, p1, p2) {
-    const p1Priority = p1Move.priority || 0;
-    const p2Priority = p2Move.priority || 0;
+    const pr1 = p1Move.priority || 0, pr2 = p2Move.priority || 0;
+    if (pr1 !== pr2) return pr1 > pr2 ? [0,1] : [1,0];
 
-    if (p1Priority !== p2Priority) {
-      return p1Priority > p2Priority ? [0, 1] : [1, 0];
+    let sp1 = applyStage(p1.stats.speed, p1.stages.speed || 0);
+    let sp2 = applyStage(p2.stats.speed, p2.stages.speed || 0);
+
+    // Weather speed boosts (Swift Swim etc.)
+    if (typeof AbilitySystem !== 'undefined' && typeof Weather !== 'undefined') {
+      const cur = Weather.current();
+      sp1 = Math.floor(sp1 * (AbilitySystem.getWeatherBoost(p1.key, cur) || 1));
+      sp2 = Math.floor(sp2 * (AbilitySystem.getWeatherBoost(p2.key, cur) || 1));
     }
 
-    const p1Speed = applyStage(p1.stats.speed, p1.stages.speed);
-    const p2Speed = applyStage(p2.stats.speed, p2.stages.speed);
-
-    if (p1Speed !== p2Speed) {
-      return p1Speed > p2Speed ? [0, 1] : [1, 0];
-    }
-
-    // Speed tie — coin flip
-    return _rng() < 0.5 ? [0, 1] : [1, 0];
+    if (sp1 !== sp2) return sp1 > sp2 ? [0,1] : [1,0];
+    return _rng() < 0.5 ? [0,1] : [1,0];
   }
 
-  // ─── Apply Move Effects ────────────────────────
-  /**
-   * Applies secondary effects of a move (status, stat changes).
-   * Returns an array of log strings describing what happened.
-   *
-   * @param {string} effectStr - The move's effect string
-   * @param {object} attacker
-   * @param {object} defender
-   * @returns {string[]} messages
-   */
-  function applyEffect(effectStr, attacker, defender) {
+  // ─── Status helpers ────────────────────────────
+  function _tryInflictStatus(pkmn, status, weather) {
+    if (pkmn.status) return false;  // already has a status
+    // Ability block check
+    if (typeof AbilitySystem !== 'undefined') {
+      const allowed = AbilitySystem.triggerStatusApply(pkmn, status, weather);
+      if (!allowed) return false;
+    }
+    // Terrain blocks
+    if (typeof Weather !== 'undefined') {
+      if (status === 'asleep'   && Weather.blocksSleepForGrounded() && !pkmn._airborne) return false;
+    }
+    // Type immunities
+    if (status === 'burned'   && pkmn.types.includes('fire'))     return false;
+    if (status === 'poisoned' && (pkmn.types.includes('poison') || pkmn.types.includes('steel'))) return false;
+    if (status === 'frozen'   && pkmn.types.includes('ice'))      return false;
+    if (status === 'paralyzed'&& pkmn.types.includes('electric')) return false;
+
+    pkmn.status = status;
+    if (status === 'asleep') pkmn._sleepTurns = 1 + Math.floor(_rng() * 3);
+    return true;
+  }
+
+  // ─── Move effects ──────────────────────────────
+  function applyEffect(effectStr, attacker, defender, weather) {
     if (!effectStr) return [];
     const msgs = [];
 
-    // ── Status infliction ──
-    if (effectStr.startsWith('burn')) {
-      const chance = parseInt(effectStr.split('_')[1]) || 100;
-      if (!defender.status && _rng() * 100 < chance) {
-        defender.status = 'burned';
-        msgs.push(`${defender.name} was burned!`);
-      }
-    }
-    if (effectStr.startsWith('paralysis')) {
-      const chance = parseInt(effectStr.split('_')[1]) || 100;
-      if (!defender.status && _rng() * 100 < chance) {
-        defender.status = 'paralyzed';
-        msgs.push(`${defender.name} is paralyzed! It may be unable to move!`);
-      }
-    }
-    if (effectStr.startsWith('poison') && !effectStr.includes('Powder')) {
-      const chance = parseInt(effectStr.split('_')[1]) || 100;
-      if (!defender.status && _rng() * 100 < chance) {
-        defender.status = 'poisoned';
-        msgs.push(`${defender.name} was poisoned!`);
-      }
-    }
-    if (effectStr === 'poison') {
-      if (!defender.status) {
-        defender.status = 'poisoned';
-        msgs.push(`${defender.name} was poisoned!`);
-      }
-    }
-    if (effectStr.startsWith('freeze')) {
-      const chance = parseInt(effectStr.split('_')[1]) || 100;
-      if (!defender.status && _rng() * 100 < chance) {
-        defender.status = 'frozen';
-        msgs.push(`${defender.name} was frozen solid!`);
-      }
-    }
-    if (effectStr === 'sleep') {
-      if (!defender.status) {
-        defender.status = 'asleep';
-        defender._sleepTurns = 1 + Math.floor(_rng() * 3); // 1–3 turns
-        msgs.push(`${defender.name} fell asleep!`);
+    const STATUS_MAP = {
+      'burn': 'burned', 'paralysis': 'paralyzed',
+      'poison': 'poisoned', 'freeze': 'frozen', 'sleep': 'asleep',
+    };
+
+    // Status infliction with chance
+    for (const [key, status] of Object.entries(STATUS_MAP)) {
+      if (effectStr === key || effectStr.startsWith(key + '_')) {
+        const chance = effectStr.includes('_') ? parseInt(effectStr.split('_')[1]) : 100;
+        if (_rng() * 100 < chance) {
+          if (_tryInflictStatus(defender, status, weather)) {
+            const statusMsgs = {
+              burned:'was burned!', paralyzed:'is paralyzed! It may be unable to move!',
+              poisoned:'was poisoned!', frozen:'was frozen solid!', asleep:'fell asleep!',
+            };
+            msgs.push(`${defender.name} ${statusMsgs[status]}`);
+          }
+        }
+        break;
       }
     }
 
-    // ── Attacker self heal ──
+    // Self heal
     if (effectStr === 'heal_50') {
       const healed = Math.floor(attacker.maxHP * 0.5);
       attacker.currentHP = Math.min(attacker.maxHP, attacker.currentHP + healed);
       msgs.push(`${attacker.name} restored HP!`);
     }
     if (effectStr === 'rest') {
-      attacker.status = 'asleep';
-      attacker._sleepTurns = 2;
+      attacker.status = 'asleep'; attacker._sleepTurns = 2;
       attacker.currentHP = attacker.maxHP;
       msgs.push(`${attacker.name} went to sleep and restored HP!`);
     }
 
-    // ── Stat changes ──
-    if (effectStr === 'atk_up_2') {
-      attacker.stages.attack = Math.min(6, attacker.stages.attack + 2);
-      msgs.push(`${attacker.name}'s Attack sharply rose!`);
+    // Stat stages - attacker boosts
+    const SELF_BOOSTS = {
+      'atk_up_2':['attack',2,true], 'atk_up':['attack',1,true],
+      'def_up_2':['defense',2,true], 'def_up':['defense',1,true],
+      'spatk_up_2':['spatk',2,true], 'spd_up':['speed',1,true],
+      'spdef_up':['spdef',1,true], 'spdef_up_2':['spdef',2,true],
+    };
+    if (SELF_BOOSTS[effectStr]) {
+      const [stat, stages, self] = SELF_BOOSTS[effectStr];
+      const target = self ? attacker : defender;
+      target.stages[stat] = Math.min(6, (target.stages[stat]||0) + stages);
+      const word = stages >= 2 ? 'sharply rose' : 'rose';
+      msgs.push(`${target.name}'s ${stat} ${word}!`);
     }
-    if (effectStr === 'def_up') {
-      attacker.stages.defense = Math.min(6, attacker.stages.defense + 1);
-      msgs.push(`${attacker.name}'s Defense rose!`);
+
+    // Defender drops
+    const DEF_DROPS = {
+      'atk_down':['attack',-1], 'def_down':['defense',-1],
+      'spdef_down':['spdef',-1], 'spd_down':['speed',-1],
+      'atk_down_2':['attack',-2], 'def_down_2':['defense',-2],
+    };
+    for (const [key, [stat, delta]] of Object.entries(DEF_DROPS)) {
+      if (effectStr === key || (effectStr.includes(key) && effectStr.includes('_'))) {
+        const chance = effectStr.split('_').pop();
+        const pct    = isNaN(parseInt(chance)) ? 100 : parseInt(chance);
+        if (_rng() * 100 < pct) {
+          defender.stages[stat] = Math.max(-6, (defender.stages[stat]||0) + delta);
+          const word = Math.abs(delta) >= 2 ? 'sharply fell' : 'fell';
+          msgs.push(`${defender.name}'s ${stat} ${word}!`);
+        }
+        break;
+      }
     }
-    if (effectStr === 'def_up_2') {
-      attacker.stages.defense = Math.min(6, attacker.stages.defense + 2);
-      msgs.push(`${attacker.name}'s Defense sharply rose!`);
-    }
-    if (effectStr === 'atk_down') {
-      defender.stages.attack = Math.max(-6, defender.stages.attack - 1);
-      msgs.push(`${defender.name}'s Attack fell!`);
-    }
+
     if (effectStr === 'defspdef_down') {
-      defender.stages.defense = Math.max(-6, defender.stages.defense - 1);
-      defender.stages.spdef  = Math.max(-6, defender.stages.spdef  - 1);
-      attacker.stages.defense = Math.max(-6, attacker.stages.defense - 1);
-      attacker.stages.spdef   = Math.max(-6, attacker.stages.spdef  - 1);
+      ['defense','spdef'].forEach(s => {
+        attacker.stages[s] = Math.max(-6,(attacker.stages[s]||0)-1);
+      });
       msgs.push(`${attacker.name}'s defenses fell!`);
     }
-    if (effectStr === 'spdef_down_10' && _rng() < 0.1) {
-      defender.stages.spdef = Math.max(-6, defender.stages.spdef - 1);
-      msgs.push(`${defender.name}'s Sp. Def fell!`);
-    }
-    if (effectStr === 'spdef_down_20' && _rng() < 0.2) {
-      defender.stages.spdef = Math.max(-6, defender.stages.spdef - 1);
-      msgs.push(`${defender.name}'s Sp. Def fell!`);
-    }
-    if (effectStr === 'def_down_30' && _rng() < 0.3) {
-      defender.stages.defense = Math.max(-6, defender.stages.defense - 1);
-      msgs.push(`${defender.name}'s Defense fell!`);
+
+    // Weather-setting moves
+    const WEATHER_MOVES = {
+      'sunny_day': 'sun', 'rain_dance': 'rain',
+      'sandstorm': 'sand', 'hail': 'hail',
+      'snowscape': 'snow',
+    };
+    if (WEATHER_MOVES[effectStr] && typeof Weather !== 'undefined') {
+      const label = Weather.set(WEATHER_MOVES[effectStr], 5);
+      msgs.push(label);
     }
 
     return msgs;
   }
 
-  // ─── End-of-Turn Effects ───────────────────────
-  /**
-   * Apply burn/poison damage, sleep tick, etc.
-   * Called after both sides have moved.
-   *
-   * @param {object} pkmn - The Pokémon to tick
-   * @returns {string[]} log messages
-   */
+  // ─── End-of-turn status ────────────────────────
   function endOfTurnEffects(pkmn) {
     const msgs = [];
-    if (pkmn.currentHP <= 0) return msgs; // already fainted
+    if (pkmn.currentHP <= 0) return msgs;
 
     if (pkmn.status === 'burned') {
       const dmg = Math.max(1, Math.floor(pkmn.maxHP / 16));
       pkmn.currentHP = Math.max(0, pkmn.currentHP - dmg);
       msgs.push(`${pkmn.name} is hurt by its burn!`);
     }
-
     if (pkmn.status === 'poisoned') {
       const dmg = Math.max(1, Math.floor(pkmn.maxHP / 8));
       pkmn.currentHP = Math.max(0, pkmn.currentHP - dmg);
       msgs.push(`${pkmn.name} is hurt by poison!`);
     }
-
     if (pkmn.status === 'asleep') {
       pkmn._sleepTurns = (pkmn._sleepTurns || 1) - 1;
-      if (pkmn._sleepTurns <= 0) {
-        pkmn.status = null;
-        msgs.push(`${pkmn.name} woke up!`);
-      }
+      if (pkmn._sleepTurns <= 0) { pkmn.status = null; msgs.push(`${pkmn.name} woke up!`); }
     }
-
-    if (pkmn.status === 'frozen') {
-      // 20% chance to thaw each turn
-      if (_rng() < 0.2) {
-        pkmn.status = null;
-        msgs.push(`${pkmn.name} thawed out!`);
-      }
+    if (pkmn.status === 'frozen' && _rng() < 0.2) {
+      pkmn.status = null;
+      msgs.push(`${pkmn.name} thawed out!`);
     }
-
     return msgs;
   }
 
-  // ─── Faint Check ──────────────────────────────
-  /**
-   * True if the Pokémon has 0 HP (fainted).
-   */
-  function hasFainted(pkmn) {
-    return pkmn.currentHP <= 0;
-  }
-
-  /**
-   * True if all Pokémon in a team have fainted.
-   * @param {object[]} team
-   */
-  function isTeamDefeated(team) {
-    return team.every(p => hasFainted(p));
-  }
+  function hasFainted(pkmn)     { return pkmn.currentHP <= 0; }
+  function isTeamDefeated(team) { return team.every(p => hasFainted(p)); }
 
   // ─── Execute one full turn ─────────────────────
-  /**
-   * Process one turn of battle.
-   * Returns an array of BattleEvent objects for the UI to consume.
-   *
-   * Event types:
-   *   { type:'move',     user, target, move, damage, effectiveness, isCrit }
-   *   { type:'miss',     user, move }
-   *   { type:'effect',   messages:[] }
-   *   { type:'eot',      messages:[] }
-   *   { type:'faint',    pkmn }
-   *   { type:'status',   pkmn, status }
-   *
-   * @param {object} playerPkmn  - Active player Pokémon
-   * @param {object} enemyPkmn   - Active enemy Pokémon
-   * @param {object} playerMove  - Move chosen by player
-   * @param {object} enemyMove   - Move chosen by CPU
-   * @returns {object[]} events
-   */
   function executeTurn(playerPkmn, enemyPkmn, playerMove, enemyMove) {
-    const events = [];
-    const order  = getTurnOrder(playerMove, enemyMove, playerPkmn, enemyPkmn);
+    const events  = [];
+    const weather = typeof Weather !== 'undefined' ? Weather : null;
+    const order   = getTurnOrder(playerMove, enemyMove, playerPkmn, enemyPkmn);
 
     const sides = [
-      { pkmn: playerPkmn, move: playerMove, label: 'player' },
-      { pkmn: enemyPkmn,  move: enemyMove,  label: 'enemy'  }
+      { pkmn: playerPkmn, move: playerMove, label:'player' },
+      { pkmn: enemyPkmn,  move: enemyMove,  label:'enemy'  },
     ];
 
     for (const idx of order) {
@@ -358,110 +293,114 @@ const BattleEngine = (() => {
       move.currentPP = Math.max(0, (move.currentPP ?? move.pp) - 1);
 
       if (!accuracyCheck(move, attacker, defender)) {
-        events.push({ type: 'miss', user: label, move });
+        events.push({ type:'miss', user:label, move });
         continue;
       }
 
-      // ── Gather multipliers from optional systems ──
-      const weatherMult = (typeof Weather        !== 'undefined') ? Weather.getMoveMult(move.type)                        : 1;
-      const abilityMult = (typeof AbilitySystem  !== 'undefined') ? AbilitySystem.triggerAttack(attacker, move, Weather)  : 1;
-      const heldMult    = (typeof HeldItems      !== 'undefined') ? HeldItems.triggerAttack(attacker, move)               : 1;
-      const defAbilMult = (typeof AbilitySystem  !== 'undefined') ? AbilitySystem.triggerDefend(defender, move, getTypeEffectiveness(move.type, defender.types)) : 1;
-      const defHeldMult = (typeof HeldItems      !== 'undefined') ? HeldItems.triggerDefend(defender, move)               : 1;
+      // Wonder Guard — only super-effective moves land
+      if (typeof AbilitySystem !== 'undefined') {
+        const dk = _abilityKey(defender);
+        if (dk === 'wonderguard') {
+          const eff = getTypeEffectiveness(move.type, defender.types);
+          if (eff <= 1 && move.category !== 'status') {
+            events.push({ type:'miss', user:label, move, reason:'wonderguard' });
+            events.push({ type:'effect', messages:[`${defender.name}'s Wonder Guard blocked the move!`] });
+            continue;
+          }
+        }
+      }
 
-      const { damage, effectiveness, effectivenessText, isCrit } =
+      // Gather all multipliers
+      const curWeather  = weather?.current() || 'none';
+      const effectiveness = getTypeEffectiveness(move.type, defender.types);
+
+      const weatherMult = weather ? (weather.getMoveMult(move.type, move.id, attacker) || 1) : 1;
+      const abilityMult = (typeof AbilitySystem !== 'undefined')
+        ? AbilitySystem.triggerAttack(attacker, move, weather, effectiveness) : 1;
+      const heldMult    = (typeof HeldItems !== 'undefined') ? HeldItems.triggerAttack(attacker, move) : 1;
+      const defAbilMult = (typeof AbilitySystem !== 'undefined')
+        ? AbilitySystem.triggerDefend(defender, move, effectiveness) : 1;
+      const defHeldMult = (typeof HeldItems !== 'undefined') ? HeldItems.triggerDefend(defender, move) : 1;
+
+      // Check for type-immunity ability (returns 0 from triggerDefend)
+      if (defAbilMult === 0) {
+        // Ability absorbed the move — show absorption message from ability trigger
+        const absorbMsgs = (typeof AbilitySystem !== 'undefined')
+          ? AbilitySystem.triggerOnHit(defender, move, attacker) : [];
+        events.push({ type:'move', user:label, target:idx===0?'enemy':'player',
+          move, damage:0, effectiveness:0, effectivenessText:'It had no effect!', isCrit:false });
+        if (absorbMsgs.length) events.push({ type:'effect', messages:absorbMsgs });
+        continue;
+      }
+
+      const isAdaptability = AbilitySystem?.POKEMON_ABILITIES?.[attacker.key] === 'adaptability';
+      const { damage, effectiveness: eff, effectivenessText, isCrit } =
         calculateDamage(attacker, defender, move, {
-          weather: weatherMult,
-          ability: abilityMult,
-          held:    heldMult * defHeldMult,
-          defAbil: defAbilMult,
+          weather: weatherMult, ability: abilityMult,
+          held: heldMult * defHeldMult, defAbil: defAbilMult,
+          adaptability: isAdaptability,
         });
 
       if (damage > 0) {
         defender.currentHP = Math.max(0, defender.currentHP - damage);
-        events.push({
-          type: 'move', user: label,
-          target: idx === 0 ? 'enemy' : 'player',
-          move, damage, effectiveness, effectivenessText, isCrit
-        });
+        events.push({ type:'move', user:label, target:idx===0?'enemy':'player',
+          move, damage, effectiveness:eff, effectivenessText, isCrit });
 
-        // ── Held item reactions ──
-        const heldAfterMsgs   = (typeof HeldItems     !== 'undefined') ? HeldItems.triggerAfterAttack(attacker, damage)         : [];
-        const rockyHelmetMsgs = (typeof HeldItems     !== 'undefined') ? HeldItems.triggerOnHit(defender, move, attacker)       : [];
-        const abilityHitMsgs  = (typeof AbilitySystem !== 'undefined') ? AbilitySystem.triggerOnHit(defender, move, attacker)   : [];
-        const allReactMsgs    = [...heldAfterMsgs, ...rockyHelmetMsgs, ...abilityHitMsgs];
-        if (allReactMsgs.length) events.push({ type: 'effect', messages: allReactMsgs });
+        const heldAfter    = (typeof HeldItems     !== 'undefined') ? HeldItems.triggerAfterAttack(attacker, damage) : [];
+        const rockyHelmet  = (typeof HeldItems     !== 'undefined') ? HeldItems.triggerOnHit(defender, move, attacker) : [];
+        const abilityHit   = (typeof AbilitySystem !== 'undefined') ? AbilitySystem.triggerOnHit(defender, move, attacker) : [];
+        const reactMsgs    = [...heldAfter, ...rockyHelmet, ...abilityHit];
+        if (reactMsgs.length) events.push({ type:'effect', messages:reactMsgs });
 
       } else {
-        events.push({
-          type: 'move', user: label,
-          target: idx === 0 ? 'enemy' : 'player',
-          move, damage: 0, effectiveness: 1, effectivenessText: '', isCrit: false
-        });
+        events.push({ type:'move', user:label, target:idx===0?'enemy':'player',
+          move, damage:0, effectiveness:1, effectivenessText:'', isCrit:false });
       }
 
-      const effectMsgs = applyEffect(move.effect, attacker, defender);
-      if (effectMsgs.length) events.push({ type: 'effect', messages: effectMsgs });
+      const effectMsgs = applyEffect(move.effect, attacker, defender, weather);
+      if (effectMsgs.length) events.push({ type:'effect', messages:effectMsgs });
 
-      // Status cured by held item (Lum Berry)
       const lumMsgs = (typeof HeldItems !== 'undefined') ? HeldItems.triggerOnStatusInflict(defender) : [];
-      if (lumMsgs.length) events.push({ type: 'effect', messages: lumMsgs });
+      if (lumMsgs.length) events.push({ type:'effect', messages:lumMsgs });
 
       if (hasFainted(defender)) {
-        events.push({ type: 'faint', pkmn: defender, side: idx === 0 ? 'enemy' : 'player' });
+        events.push({ type:'faint', pkmn:defender, side:idx===0?'enemy':'player' });
         break;
       }
     }
 
-    // ── End-of-Turn ──
+    // ── End-of-turn ──────────────────────────────
     if (!hasFainted(playerPkmn) && !hasFainted(enemyPkmn)) {
       const eotMsgs = [];
 
-      // Status effects
       eotMsgs.push(...endOfTurnEffects(playerPkmn));
       eotMsgs.push(...endOfTurnEffects(enemyPkmn));
 
-      // Weather tick
-      if (typeof Weather !== 'undefined') {
-        eotMsgs.push(...Weather.tick([playerPkmn, enemyPkmn]));
-      }
+      if (weather) eotMsgs.push(...weather.tick([playerPkmn, enemyPkmn]));
 
-      // Held items EOT (Leftovers, Sitrus)
       if (typeof HeldItems !== 'undefined') {
         eotMsgs.push(...HeldItems.triggerEndOfTurn(playerPkmn));
         eotMsgs.push(...HeldItems.triggerEndOfTurn(enemyPkmn));
       }
-
-      // Ability EOT (Speed Boost)
       if (typeof AbilitySystem !== 'undefined') {
-        eotMsgs.push(...AbilitySystem.triggerEndOfTurn(playerPkmn, Weather));
-        eotMsgs.push(...AbilitySystem.triggerEndOfTurn(enemyPkmn,  Weather));
+        eotMsgs.push(...AbilitySystem.triggerEndOfTurn(playerPkmn, weather));
+        eotMsgs.push(...AbilitySystem.triggerEndOfTurn(enemyPkmn,  weather));
       }
 
-      if (eotMsgs.length) events.push({ type: 'eot', messages: eotMsgs });
+      if (eotMsgs.length) events.push({ type:'eot', messages:eotMsgs });
 
-      if (hasFainted(playerPkmn)) events.push({ type: 'faint', pkmn: playerPkmn, side: 'player' });
-      if (hasFainted(enemyPkmn))  events.push({ type: 'faint', pkmn: enemyPkmn,  side: 'enemy'  });
+      if (hasFainted(playerPkmn)) events.push({ type:'faint', pkmn:playerPkmn, side:'player' });
+      if (hasFainted(enemyPkmn))  events.push({ type:'faint', pkmn:enemyPkmn,  side:'enemy'  });
     }
 
     return events;
   }
 
-  // ─── Public API ───────────────────────────────
   return {
-    calculateDamage,
-    accuracyCheck,
-    getTurnOrder,
-    applyEffect,
-    endOfTurnEffects,
-    hasFainted,
-    isTeamDefeated,
-    executeTurn,
-    // RNG control — used by PvP to ensure both clients run identical dice rolls
-    rng:          () => _rng(),
-    seedRng,
-    resetRng,
-    generateSeed,
+    calculateDamage, accuracyCheck, getTurnOrder,
+    applyEffect, endOfTurnEffects,
+    hasFainted, isTeamDefeated, executeTurn,
+    rng: () => _rng(), seedRng, resetRng, generateSeed,
   };
 
 })();

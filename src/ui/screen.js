@@ -94,6 +94,10 @@ const Screen = (() => {
         renderPvPTeamPreview();
         break;
 
+      case 'screen-quickbattle':
+        if (typeof initQuickBattleScreen === 'function') initQuickBattleScreen();
+        break;
+
       case 'screen-battle':
         break;
 

@@ -29,7 +29,7 @@
         <button class="menu-btn hidden" id="menu-continue-btn" onclick="Screen.show('screen-overworld')" style="border-color:var(--accent-blue);box-shadow:0 4px 0 #1a3a6a">
           <span class="btn-icon">▶️</span> Continue Story
         </button>
-        <button class="menu-btn" onclick="Screen.show('screen-team')">
+        <button class="menu-btn" onclick="Screen.show('screen-quickbattle')">
           <span class="btn-icon">⚔️</span> Quick Battle
         </button>
         <button class="menu-btn" onclick="Screen.show('screen-tower-menu')">
@@ -53,6 +53,60 @@
   </div>
 
   <!-- ═══════════════════════════════════════
+       SCREEN: QUICK BATTLE
+  ═══════════════════════════════════════ -->
+  <div id="screen-quickbattle" class="screen">
+    <div class="screen-header">
+      <button class="back-btn" onclick="Screen.show('screen-menu')">← Back</button>
+      <h2 class="screen-title">⚔️ Quick Battle</h2>
+      <div class="qb-header-controls">
+        <select id="quick-battle-level" class="level-picker">
+          <option value="5">Lv. 5</option>
+          <option value="10">Lv. 10</option>
+          <option value="25">Lv. 25</option>
+          <option value="50" selected>Lv. 50</option>
+          <option value="75">Lv. 75</option>
+          <option value="100">Lv. 100</option>
+        </select>
+        <select id="quick-battle-tier" class="level-picker">
+          <option value="1">Easy</option>
+          <option value="2" selected>Normal</option>
+          <option value="3">Hard</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Selected team strip -->
+    <div class="qb-party-bar">
+      <div class="qb-party-slots" id="qb-party-slots">
+        <!-- 6 slots rendered by JS -->
+      </div>
+      <button class="big-btn tower-enter qb-fight-btn" id="qb-fight-btn" onclick="startQuickBattle()">
+        ⚔️ Fight!
+      </button>
+    </div>
+
+    <!-- Pokémon picker grid -->
+    <div class="qb-picker-area">
+      <div class="qb-picker-header">
+        <span class="qb-picker-label">Your Collection — tap to add/remove</span>
+        <input type="text" id="qb-search" class="qb-search-input" placeholder="Search..." oninput="qbFilterPicker()"/>
+      </div>
+      <div class="qb-picker-grid" id="qb-picker-grid">
+        <!-- filled by JS -->
+      </div>
+    </div>
+
+    <!-- W/L record strip -->
+    <div class="qb-record-bar">
+      <div class="qb-record-item"><span class="qb-rl">Wins</span><span class="qb-rv" id="qb-wins">0</span></div>
+      <div class="qb-record-item"><span class="qb-rl">Losses</span><span class="qb-rv" id="qb-losses">0</span></div>
+      <div class="qb-record-item"><span class="qb-rl">Win Rate</span><span class="qb-rv" id="qb-winrate">—</span></div>
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════
        SCREEN: TEAM BUILDER
   ═══════════════════════════════════════ -->
   <div id="screen-team" class="screen">
@@ -68,7 +122,7 @@
           <option value="75">Lv 75</option>
           <option value="100">Lv 100</option>
         </select>
-        <button class="action-btn" onclick="startBattle('cpu')">Battle! →</button>
+        <button class="action-btn" onclick="startQuickBattle()">Battle! →</button>
       </div>
     </div>
 
@@ -151,7 +205,27 @@
       <div class="collection-panel">
         <h3 class="panel-title">Your Collection</h3>
         <div class="collection-filter">
-          <input type="text" id="search-pokemon" placeholder="Search Pokémon..." oninput="filterCollection()" />
+          <div class="coll-search-row">
+            <input type="text" id="search-pokemon" placeholder="Search Pokémon..." oninput="filterCollection()" />
+            <button class="coll-shiny-toggle" id="coll-shiny-toggle"
+                    onclick="TeamBuilder.setCollShinyOnly(!this.classList.contains('active')); this.classList.toggle('active')"
+                    title="Show shiny only">✨</button>
+          </div>
+          <div class="coll-type-chips" id="coll-type-chips">
+            <button class="coll-type-chip active" onclick="collSetType('all',this)">All</button>
+            <button class="coll-type-chip type-fire"     onclick="collSetType('fire',this)">🔥</button>
+            <button class="coll-type-chip type-water"    onclick="collSetType('water',this)">💧</button>
+            <button class="coll-type-chip type-grass"    onclick="collSetType('grass',this)">🌿</button>
+            <button class="coll-type-chip type-electric" onclick="collSetType('electric',this)">⚡</button>
+            <button class="coll-type-chip type-psychic"  onclick="collSetType('psychic',this)">🔮</button>
+            <button class="coll-type-chip type-ice"      onclick="collSetType('ice',this)">❄️</button>
+            <button class="coll-type-chip type-dragon"   onclick="collSetType('dragon',this)">🐉</button>
+            <button class="coll-type-chip type-ghost"    onclick="collSetType('ghost',this)">👻</button>
+            <button class="coll-type-chip type-dark"     onclick="collSetType('dark',this)">🌑</button>
+            <button class="coll-type-chip type-fighting" onclick="collSetType('fighting',this)">🥊</button>
+            <button class="coll-type-chip type-poison"   onclick="collSetType('poison',this)">☠️</button>
+            <button class="coll-type-chip type-normal"   onclick="collSetType('normal',this)">⬛</button>
+          </div>
         </div>
         <div class="collection-grid" id="collection-grid">
           <!-- Filled by JS -->
@@ -166,154 +240,149 @@
   <div id="screen-battle" class="screen">
 
     <!-- Battle Arena -->
+    <!-- GBA-style battle arena -->
     <div class="battle-arena">
+      <!-- Striped background layers -->
+      <div class="battle-bg">
+        <div class="bg-sky"></div>
+        <div class="bg-ground-band"></div>
+        <div class="bg-ground-enemy"></div>
+        <div class="bg-ground-player"></div>
+      </div>
+
       <!-- Weather particle overlay -->
       <canvas id="weather-particle-canvas" class="weather-particle-canvas"></canvas>
 
-      <!-- Enemy Side -->
-      <div class="battle-side enemy-side">
-        <div class="battle-info-box enemy-info">
-          <div class="info-name-row">
-            <span class="info-name" id="enemy-name">CHARIZARD</span>
-            <span class="info-level" id="enemy-level">Lv.50</span>
+      <!-- ENEMY side: info top-left, sprite top-right -->
+      <div class="ba-enemy-info" id="ba-enemy-info">
+        <div class="ba-info-inner">
+          <div class="ba-name-row">
+            <span class="ba-name" id="enemy-name">CHARIZARD</span>
+            <span class="ba-gender ba-gender-m">♂</span>
+            <span class="ba-level" id="enemy-level">Lv.<b>50</b></span>
           </div>
-          <div class="hp-bar-wrapper">
-            <span class="hp-label">HP</span>
-            <div class="hp-bar-track">
-              <div class="hp-bar-fill" id="enemy-hp-bar" style="width:100%"></div>
+          <div class="ba-hp-row">
+            <span class="ba-hp-label">HP</span>
+            <div class="ba-hp-track">
+              <div class="ba-hp-fill" id="enemy-hp-bar" style="width:100%"></div>
             </div>
           </div>
-          <div class="info-hp-nums" id="enemy-hp-nums">150 / 150</div>
-          <div class="info-types" id="enemy-types"></div>
+          <div class="ba-types" id="enemy-types"></div>
         </div>
-        <div class="sprite-platform enemy-platform">
-          <!-- Story mode trainer sprite — hidden in quick battle / tower -->
-          <div class="trainer-sprite-panel hidden" id="trainer-sprite-panel">
-            <img class="trainer-battle-sprite" id="trainer-battle-sprite" src="" alt="" />
-            <div class="trainer-battle-name" id="trainer-battle-name"></div>
-          </div>
-          <img class="battle-sprite enemy-sprite" id="enemy-sprite"
-            src="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/6.png"
-            alt="Enemy Pokémon" />
-        </div>
+        <!-- Circle cap — status indicator like the reference -->
+        <div class="ba-info-cap" id="enemy-status-cap">○</div>
       </div>
 
-      <!-- Player Side -->
-      <div class="battle-side player-side">
-        <div class="sprite-platform player-platform">
-          <img class="battle-sprite player-sprite" id="player-sprite"
-            src="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/back/25.png"
-            alt="Your Pokémon" />
+      <div class="ba-enemy-sprite-wrap">
+        <!-- Story mode trainer sprite -->
+        <div class="trainer-sprite-panel hidden" id="trainer-sprite-panel">
+          <img class="trainer-battle-sprite" id="trainer-battle-sprite" src="" alt="" />
+          <div class="trainer-battle-name" id="trainer-battle-name"></div>
         </div>
-        <div class="battle-info-box player-info">
-          <div class="info-name-row">
-            <span class="info-name" id="player-name">PIKACHU</span>
-            <span class="info-level" id="player-level">Lv.50</span>
-          </div>
-          <div class="hp-bar-wrapper">
-            <span class="hp-label">HP</span>
-            <div class="hp-bar-track">
-              <div class="hp-bar-fill" id="player-hp-bar" style="width:100%"></div>
-            </div>
-          </div>
-          <div class="info-hp-nums" id="player-hp-nums">100 / 100</div>
-          <div class="info-types" id="player-types"></div>
-          <!-- XP Bar (Part 5) -->
-          <div class="xp-bar-wrapper">
-            <span class="xp-label">EXP</span>
-            <div class="xp-bar-track">
-              <div class="xp-bar-fill" id="player-xp-bar-fill" style="width:0%"></div>
-            </div>
-            <span class="xp-text" id="player-xp-text"></span>
-          </div>
-        </div>
+        <div class="ba-platform ba-platform-enemy"></div>
+        <img class="battle-sprite enemy-sprite" id="enemy-sprite"
+          src="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/6.png"
+          alt="Enemy Pokémon" />
       </div>
 
-      <!-- Battle Scene Decoration -->
-      <div class="battle-bg">
-        <div class="bg-sky"></div>
-        <div class="bg-ground"></div>
+      <!-- PLAYER side: sprite bottom-left, info bottom-right -->
+      <div class="ba-player-sprite-wrap">
+        <div class="ba-platform ba-platform-player"></div>
+        <img class="battle-sprite player-sprite" id="player-sprite"
+          src="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/back/25.png"
+          alt="Your Pokémon" />
       </div>
+
+      <div class="ba-player-info" id="ba-player-info">
+        <!-- Left-pointing notch on player box -->
+        <div class="ba-info-tail"></div>
+        <div class="ba-info-inner ba-info-inner-player">
+          <div class="ba-name-row">
+            <span class="ba-name" id="player-name">PIKACHU</span>
+            <span class="ba-gender ba-gender-m" id="player-gender-icon">♂</span>
+            <span class="ba-level" id="player-level">Lv.<b>50</b></span>
+          </div>
+          <div class="ba-hp-row">
+            <span class="ba-hp-label">HP</span>
+            <div class="ba-hp-track">
+              <div class="ba-hp-fill" id="player-hp-bar" style="width:100%"></div>
+            </div>
+          </div>
+          <div class="ba-hp-nums" id="player-hp-nums">100<span class="ba-hp-slash">/</span>100</div>
+          <div class="ba-types" id="player-types"></div>
+          <!-- EXP bar -->
+          <div class="ba-exp-row">
+            <span class="ba-exp-label">EXP</span>
+            <div class="ba-exp-track">
+              <div class="ba-exp-fill" id="player-xp-bar-fill" style="width:0%"></div>
+            </div>
+            <span class="ba-exp-text" id="player-xp-text"></span>
+          </div>
+        </div>
+      </div>
+      <!-- Tower HUD (shown only in tower mode) -->
+      <div class="tower-hud hidden" id="tower-hud">
+        <span>🗼 Floor <span id="tower-floor-num">1</span></span>
+        <div class="tower-party-hud" id="tower-party-hud"></div>
+      </div>
+
+      <!-- Weather HUD -->
+      <div class="weather-hud hidden" id="weather-hud"></div>
+
+      <!-- Battle Log -->
+      <button class="battle-log-btn" id="battle-log-btn" onclick="BattleLog.toggle()">📋 Log</button>
+      <div class="battle-log-panel hidden" id="battle-log-panel"></div>
+
+      <!-- Mute button -->
+      <button class="mute-btn" id="mute-btn" onclick="BattleUI.toggleMute()" title="Toggle sound">🔊</button>
+
+      <!-- Flee button -->
+      <button class="escape-btn" onclick="Battle.playerFled()">✕ Flee</button>
     </div>
 
-    <!-- Battle UI Panel -->
+    <!-- GBA-style Battle Panel -->
     <div class="battle-panel">
-
-      <!-- Message Box -->
+      <!-- Message side -->
       <div class="battle-message" id="battle-message">
         What will <span id="msg-pokemon-name">PIKACHU</span> do?
       </div>
 
-      <!-- Action Menu -->
+      <!-- Action grid — right side -->
       <div class="battle-actions" id="battle-actions">
-        <button class="action-choice" id="btn-fight" onclick="BattleUI.showMoves()">
-          ⚔️ FIGHT
-        </button>
-        <button class="action-choice" id="btn-bag" onclick="BattleUI.bag()">
-          🎒 BAG
-        </button>
-        <button class="action-choice" id="btn-pokemon" onclick="BattleUI.switchMenu()">
-          🔄 POKÉMON
-        </button>
-        <button class="action-choice" id="btn-run" onclick="BattleUI.run()">
-          🏃 RUN
-        </button>
+        <button class="action-choice" id="btn-fight"   onclick="BattleUI.showMoves()">▶ Fight</button>
+        <button class="action-choice" id="btn-bag"     onclick="BattleUI.bag()">Ball</button>
+        <button class="action-choice" id="btn-pokemon" onclick="BattleUI.switchMenu()">Pokémon</button>
+        <button class="action-choice" id="btn-run"     onclick="BattleUI.run()">Run</button>
       </div>
 
-      <!-- Move Menu (hidden by default) -->
+      <!-- Move Menu -->
       <div class="move-menu hidden" id="move-menu">
-        <button class="back-to-actions" onclick="BattleUI.showActions()">← Back</button>
-        <div class="moves-grid" id="moves-grid">
-          <!-- Filled by JS -->
-        </div>
+        <div class="moves-grid" id="moves-grid"></div>
         <div class="move-detail" id="move-detail">
           <span id="move-detail-type">—</span>
           <span id="move-detail-cat">—</span>
-          <span id="move-detail-pp">PP: —/—</span>
-          <span id="move-detail-power">Power: —</span>
+          <span id="move-detail-pp">PP —/—</span>
+          <span id="move-detail-power">Pwr —</span>
+          <button class="back-to-actions" onclick="BattleUI.showActions()">← Back</button>
         </div>
       </div>
 
-      <!-- Switch Menu (hidden by default) -->
+      <!-- Switch Menu -->
       <div class="switch-menu hidden" id="switch-menu">
         <button class="back-to-actions" onclick="BattleUI.showActions()">← Back</button>
-        <div class="switch-grid" id="switch-grid">
-          <!-- Filled by JS -->
-        </div>
+        <div class="switch-grid" id="switch-grid"></div>
       </div>
 
-      <!-- Bag Menu (hidden by default) -->
+      <!-- Bag Menu -->
       <div class="bag-menu hidden" id="bag-menu">
         <button class="back-to-actions" onclick="BattleUI.showActions()">← Back</button>
-        <div class="bag-items-list" id="bag-items-list">
-          <!-- Filled by JS -->
-        </div>
-        <!-- Target picker: shown after selecting an item -->
+        <div class="bag-items-list" id="bag-items-list"></div>
         <div class="bag-target hidden" id="bag-target">
           <p class="bag-target-label">Use on which Pokémon?</p>
           <div class="bag-target-grid" id="bag-target-grid"></div>
         </div>
       </div>
     </div>
-
-    <!-- Tower HUD (shown only in tower mode) -->
-    <div class="tower-hud hidden" id="tower-hud">
-      <span>🗼 Floor <span id="tower-floor-num">1</span></span>
-      <div class="tower-party-hud" id="tower-party-hud"></div>
-    </div>
-
-    <!-- Weather HUD (Part 5) -->
-    <div class="weather-hud hidden" id="weather-hud"></div>
-
-    <!-- Battle Log (Part 6) -->
-    <button class="battle-log-btn" id="battle-log-btn" onclick="BattleLog.toggle()">📋 Log</button>
-    <div class="battle-log-panel hidden" id="battle-log-panel"></div>
-
-    <!-- Mute button -->
-    <button class="mute-btn" id="mute-btn" onclick="BattleUI.toggleMute()" title="Toggle sound">🔊</button>
-
-    <!-- Back to menu -->
-    <button class="escape-btn" onclick="Battle.playerFled()">✕ Flee</button>
   </div>
 
   <!-- ═══════════════════════════════════════
@@ -366,17 +435,19 @@
       <div id="tower-lead-section" class="hidden">
         <div class="tower-slots-label">Choose your lead Pokémon:</div>
         <div id="tower-lead-picker" class="tower-lead-picker"></div>
-        <button class="big-btn" id="tower-enter-btn" onclick="startTowerBattle()">
-          🗼 Enter Tower →
-        </button>
+        <div class="tower-action-area">
+          <button class="big-btn tower-enter" id="tower-enter-btn" onclick="startTowerBattle()">
+            🗼 Enter Tower →
+          </button>
+        </div>
       </div>
 
       <!-- Resume button — shown when an ACTIVE slot is selected -->
-      <button class="big-btn hidden" id="tower-resume-btn"
-              onclick="resumeTowerRun()"
-              style="background:var(--accent-purple);box-shadow:0 4px 0 #6020a0">
-        🔄 <span id="tower-resume-floor">Resume Run</span>
-      </button>
+      <div class="tower-action-area">
+        <button class="big-btn tower-resume hidden" id="tower-resume-btn" onclick="resumeTowerRun()">
+          ▶ <span id="tower-resume-floor">Resume Run</span>
+        </button>
+      </div>
     </div>
   </div>
 
@@ -398,7 +469,7 @@
           <h3 class="pvp-section-title">Your Trainer</h3>
           <input type="text" id="pvp-name-input" class="pvp-input"
             placeholder="Enter your name..." maxlength="16" value="Trainer" />
-          <button class="big-btn" id="pvp-connect-btn"
+          <button class="big-btn" id="pvp-connect-btn" style="border-color:var(--accent-blue);color:var(--accent-blue)"
             onclick="PvP.connect(document.getElementById('pvp-name-input').value)">
             Connect to Server
           </button>
@@ -424,7 +495,7 @@
               <option value="100">Lv 100</option>
             </select>
           </div>
-          <button class="big-btn" onclick="PvP.findMatch()">⚔️ Find Match</button>
+          <button class="big-btn tower-enter" onclick="PvP.findMatch()">⚔️ Find Match</button>
         </div>
 
         <!-- Searching state -->
@@ -588,7 +659,7 @@
       <div class="result-icon" id="result-icon">🏆</div>
       <div class="result-title" id="result-title">Victory!</div>
       <div class="result-detail" id="result-detail"></div>
-      <button class="big-btn" onclick="afterBattle()">Continue →</button>
+      <button class="big-btn tower-enter" onclick="afterBattle()">Continue →</button>
     </div>
   </div>
 
@@ -697,7 +768,7 @@
       <div class="ft-section-label">Opponents</div>
       <div class="ft-enemy-list" id="ft-enemy-list"></div>
       <div class="ft-reward" id="ft-reward" style="display:none"></div>
-      <button class="big-btn" id="ft-begin-btn" style="margin-top:24px">⚔️ Begin Battle!</button>
+      <button class="big-btn tower-enter" id="ft-begin-btn" style="margin-top:24px">⚔️ Begin Battle!</button>
     </div>
   </div>
 
@@ -741,6 +812,7 @@
   <!-- ── Tower (needs pokemon+save+battle) ── -->
   <script src="src/tower/floorTransition.js"></script>
   <script src="src/tower/eggHatch.js"></script>
+  <script src="src/tower/towerShop.js"></script>
   <script src="src/tower/tower.js"></script>
 
   <!-- ── Online ── -->

@@ -47,8 +47,10 @@ const SaveSystem = (() => {
     },
     // Tower run save slots (3 independent runs)
     towerSlots: [null, null, null],
-    // Shiny unlocks: Set of pokemon keys
+    // Shiny unlocks: Set of pokemon keys that have shiny available
     shinies: [],
+    // Which team slots currently have shiny toggled ON (key → bool)
+    activeShiny: {},
     // Per-pokemon held items for quick battle (key → itemKey)
     heldItems: {},
     playtime:  0,
@@ -106,8 +108,10 @@ const SaveSystem = (() => {
       parsed.towerSlots = [null, null, null];
     }
     // v4 → v5: shinies and heldItems
-    if (!parsed.shinies)    parsed.shinies    = [];
-    if (!parsed.heldItems)  parsed.heldItems  = {};
+    if (!parsed.shinies)     parsed.shinies     = [];
+    if (!parsed.heldItems)   parsed.heldItems   = {};
+    // v5 → v6: activeShiny (which team slots have shiny toggled on)
+    if (!parsed.activeShiny) parsed.activeShiny = {};
     parsed.version = SAVE_VERSION;
     return { ...DEFAULTS, ...parsed };
   }
@@ -206,6 +210,20 @@ const SaveSystem = (() => {
     save();
   }
 
+  // ── Active shiny (which team slots have shiny toggled ON) ──
+  function getActiveShiny()           { return get().activeShiny || {}; }
+  function isShinyActive(key)         { return !!(get().activeShiny || {})[key]; }
+  function setActiveShiny(key, value) {
+    if (!get().activeShiny) get().activeShiny = {};
+    get().activeShiny[key] = !!value;
+    save();
+  }
+  function clearActiveShiny(key) {
+    if (!get().activeShiny) return;
+    delete get().activeShiny[key];
+    save();
+  }
+
   // ── Held items (quick battle per-pokemon) ───────
   function getHeldItems()        { return get().heldItems || {}; }
   function getHeldItem(key)      { return (get().heldItems || {})[key] || null; }
@@ -254,6 +272,7 @@ const SaveSystem = (() => {
     getPlaytimeString,
     getTowerSlots, getTowerSlot, saveTowerSlot, clearTowerSlot, getActiveTowerSlot,
     getShinies, hasShiny, unlockShiny, lockShiny,
+    getActiveShiny, isShinyActive, setActiveShiny, clearActiveShiny,
     getHeldItems, getHeldItem, setHeldItem, clearHeldItem,
   };
 

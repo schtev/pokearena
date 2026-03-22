@@ -11,9 +11,17 @@ const FloorTransition = (() => {
   const FLOOR_FLAVOUR = {
     wild:    { icon: '🌿', label: 'Wild Battle',     colour: '#3ddc84', bg: '#0d1f0d' },
     trainer: { icon: '🧑', label: 'Trainer Battle',  colour: '#4e8cff', bg: '#0d0f1f' },
-    elite:   { icon: '⚔️', label: 'Elite Trainer',   colour: '#b06aff', bg: '#160d1f' },
-    boss:    { icon: '💀', label: 'FLOOR BOSS',       colour: '#e8304a', bg: '#1f0d0d' },
+    elite:   { icon: '⚔️', label: 'Mini Boss',        colour: '#b06aff', bg: '#160d1f' },
+    boss:    { icon: '👑', label: '★ FLOOR BOSS ★',  colour: '#e8304a', bg: '#1f0d0d' },
   };
+
+  // Special override for every 100th floor (apex boss)
+  function _getFlavour(floorData) {
+    if (floorData.type === 'boss' && floorData.floorNumber % 100 === 0) {
+      return { icon: '💀', label: '☠ APEX BOSS ☠', colour: '#ff0040', bg: '#1f0000' };
+    }
+    return FLOOR_FLAVOUR[floorData.type] || FLOOR_FLAVOUR.trainer;
+  }
 
   /**
    * Show the animated floor transition overlay, then resolve when
@@ -35,7 +43,7 @@ const FloorTransition = (() => {
 
       if (!overlay) { resolve(); return; }
 
-      const flavour = FLOOR_FLAVOUR[floorData.type] || FLOOR_FLAVOUR.trainer;
+      const flavour = _getFlavour(floorData);
 
       // Style
       bgEl.style.background  = flavour.bg;

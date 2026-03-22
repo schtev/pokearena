@@ -517,7 +517,8 @@ const Battle = (() => {
     // Grant XP — each surviving player Pokémon gains levels in tower mode
     if (isTowerMode) {
       const floor = Tower.getCurrentFloor();
-      const floorBonus = Math.max(1, floor / 10);
+      // floorBonus: 1× on floor 1, grows linearly (floor 10 → 2×, floor 50 → 6×)
+      const floorBonus = Math.max(1, 1 + (floor - 1) / 9);
 
       // Grant XP for each enemy Pokémon defeated
       const evoEvents = [];
@@ -528,7 +529,9 @@ const Battle = (() => {
         let totalXP = 0;
         enemyTeam.forEach(enemy => {
           if (typeof XPSystem !== 'undefined') {
-            totalXP += XPSystem.calcReward(enemy, floorBonus, pkmn.level);
+            const earnedXP = XPSystem.calcReward(enemy, floorBonus, pkmn.level);
+            totalXP += earnedXP;
+            if (typeof _lastTowerXP !== 'undefined') _lastTowerXP += earnedXP;
           }
         });
 
@@ -538,10 +541,8 @@ const Battle = (() => {
           // Animate XP bar
           XPSystem.animateGain('player', pkmn, totalXP);
 
-          // Persist the new level so the next tower battle starts at it
-          if (typeof SaveSystem !== 'undefined') {
-            SaveSystem.setTowerLevel(pkmn.key, pkmn.level);
-          }
+          // Note: we deliberately do NOT persist the level to pokemonLevels —
+          // tower runs are independent. Level is saved via Tower.syncPartyLevels().
 
           levelEvents.forEach(ev => {
             showLevelUpToast(`${pkmn.name} grew to Lv.${ev.newLevel}!`);
@@ -581,6 +582,20 @@ const Battle = (() => {
 
       // Check for new moves to learn (after level-up and evolutions)
       await MoveLearning.checkAndLearnMoves(playerTeam);
+
+      // Award shop coins: 1 coin per 100 XP earned (approximate)
+      if (typeof TowerShop !== 'undefined') {
+        let totalEarned = 0;
+        enemyTeam.forEach(enemy => {
+          playerTeam.forEach(p => {
+            if (!BattleEngine.hasFainted(p)) {
+              totalEarned += XPSystem.calcReward(enemy, Math.max(1, 1 + (Tower.getCurrentFloor()-2)/9), p.level);
+            }
+          });
+        });
+        const coins = TowerShop.awardBattleCoins(totalEarned);
+        if (coins > 0) showLevelUpToast(`🪙 +${coins} coins!`);
+      }
     }
 
     const overlay  = document.getElementById('result-overlay');
@@ -617,9 +632,15 @@ const Battle = (() => {
       SaveSystem.setBestFloor(floor);
     } else {
       detail.textContent = 'You won the battle!';
+      // Record win for quick battle
+      if (!isTowerMode && !Battle.isStoryBattle()) {
+        const rec = _getQBRecord(); rec.wins++; _saveQBRecord(rec);
+      }
     }
 
     overlay.classList.remove('hidden');
+    overlay.classList.remove('defeat');
+    overlay.classList.add('victory');
     busy = false;
   }
 
@@ -654,9 +675,14 @@ const Battle = (() => {
     if (isTowerMode) {
       Tower.clearPendingEgg();
       Tower.endRun();
+    } else if (!Battle.isStoryBattle()) {
+      // Record loss for quick battle
+      const rec = _getQBRecord(); rec.losses++; _saveQBRecord(rec);
     }
 
     overlay.classList.remove('hidden');
+    overlay.classList.remove('victory');
+    overlay.classList.add('defeat');
     busy = false;
   }
 
@@ -734,6 +760,7 @@ const Battle = (() => {
     isStoryBattle,
     fireStoryWin,
     fireStoryLose,
+    get isTower()    { return isTowerMode; },
     get playerTeam() { return playerTeam; },
     get enemyTeam()  { return enemyTeam;  }
   };
@@ -782,7 +809,12 @@ const BattleUI = (() => {
 
   function setMessage(msg) {
     const el = document.getElementById('battle-message');
-    if (el) el.textContent = msg;
+    if (!el) return;
+    el.textContent = msg;
+    // Brief flash to draw attention to new message
+    el.classList.remove('new-msg');
+    void el.offsetWidth; // force reflow to restart animation
+    el.classList.add('new-msg');
   }
 
   function lockInput() {
@@ -803,13 +835,26 @@ const BattleUI = (() => {
 
     player.moves.forEach((move, i) => {
       const pp      = move.currentPP ?? move.pp;
+      const ppPct   = move.pp > 0 ? Math.round((pp / move.pp) * 100) : 0;
+      const ppClass = ppPct <= 25 ? 'low' : ppPct <= 50 ? 'mid' : '';
+      const cat     = move.category || 'status';
       const btn     = document.createElement('button');
       btn.className = 'move-btn';
+      btn.dataset.type = move.type;
       btn.disabled  = pp <= 0;
       btn.innerHTML = `
         <span>${move.name}</span>
-        <span class="type-badge type-${move.type} move-btn-type">${move.type}</span>
-        <span class="move-btn-pp">PP ${pp}/${move.pp}</span>
+        <div style="display:flex;gap:5px;align-items:center">
+          <span class="type-badge type-${move.type} move-btn-type">${move.type}</span>
+          <span class="move-btn-cat ${cat}">${cat === 'physical' ? '⚔' : cat === 'special' ? '✨' : '○'}</span>
+          ${move.power ? `<span style="font-size:7px;color:var(--text-dim)">Pwr ${move.power}</span>` : ''}
+        </div>
+        <div class="move-btn-pp">
+          <span>${pp}/${move.pp}</span>
+          <div class="move-btn-pp-bar">
+            <div class="move-btn-pp-fill ${ppClass}" style="width:${ppPct}%"></div>
+          </div>
+        </div>
       `;
       btn.addEventListener('click',       () => Battle.playerChoosesMove(i));
       btn.addEventListener('mouseenter',  () => hoverMoveDetail(move));
@@ -990,7 +1035,9 @@ const BattleUI = (() => {
 
   function _renderStatusBadge(side, pkmn) {
     if (!pkmn) return;
-    const nameRow = document.querySelector(`.${side === 'player' ? 'player' : 'enemy'}-info .info-name-row`);
+    // HTML uses ba-name-row inside ba-player-info / ba-enemy-info
+    const infoSel = side === 'player' ? '.ba-player-info .ba-name-row' : '.ba-enemy-info .ba-name-row';
+    const nameRow = document.querySelector(infoSel);
     if (!nameRow) return;
 
     // Remove existing badge
@@ -1049,9 +1096,9 @@ const BattleUI = (() => {
 
     // Names + levels
     document.getElementById('player-name').textContent  = player.name;
-    document.getElementById('player-level').textContent = `Lv.${player.level}`;
+    document.getElementById('player-level').innerHTML   = `Lv.<b>${player.level}</b>`;
     document.getElementById('enemy-name').textContent   = enemy.name;
-    document.getElementById('enemy-level').textContent  = `Lv.${enemy.level}`;
+    document.getElementById('enemy-level').innerHTML    = `Lv.<b>${enemy.level}</b>`;
 
     // HP bars
     setHPBar('player', player.currentHP, player.maxHP);
@@ -1081,13 +1128,13 @@ const BattleUI = (() => {
     if (!pkmn) return;
 
     document.getElementById(`${side}-name`).textContent  = pkmn.name;
-    document.getElementById(`${side}-level`).textContent = `Lv.${pkmn.level}`;
+    document.getElementById(`${side}-level`).innerHTML = `Lv.<b>${pkmn.level}</b>`;
     setHPBar(side, pkmn.currentHP, pkmn.maxHP);
     renderTypes(`${side}-types`, pkmn.types);
 
     // Held item badge
     if (typeof HeldItems !== 'undefined') {
-      const infoBox = document.querySelector(`.${side === 'player' ? 'player' : 'enemy'}-info`);
+      const infoBox = document.querySelector(side === 'player' ? '.ba-player-info' : '.ba-enemy-info');
       if (infoBox) {
         infoBox.querySelector('.held-item-badge')?.remove();
         if (pkmn.heldItem) {
@@ -1115,7 +1162,7 @@ const BattleUI = (() => {
       if (pct <= 20) bar.classList.add('low');
       else if (pct <= 50) bar.classList.add('mid');
     }
-    if (nums) nums.textContent = `${Math.max(0,current)} / ${max}`;
+    if (nums) nums.innerHTML = `${Math.max(0,current)}<span class="ba-hp-slash">/</span>${max}`;
   }
 
   function renderTypes(elId, types) {
@@ -1219,23 +1266,192 @@ async function playEvolutionSequence(fromKey, toKey, slotIndex) {
 //  GLOBAL ENTRY POINTS (called from HTML)
 // ═══════════════════════════════════════════════════
 
+// ─── Quick Battle screen logic ────────────────────
+let _qbParty = [];   // keys of selected party for quick battle
+
+function initQuickBattleScreen() {
+  // Restore saved QB party (or use existing TeamBuilder team as default)
+  try {
+    const saved = JSON.parse(localStorage.getItem('pokearena_qb_party') || 'null');
+    const savedUnlocked = new Set(SaveSystem.getUnlocked());
+    if (saved && Array.isArray(saved)) {
+      // Validate saved keys still exist and are unlocked (hardcoded or earned)
+      _qbParty = saved.filter(k =>
+        POKEMON_DATA[k] && (POKEMON_DATA[k].unlocked === true || savedUnlocked.has(k))
+      );
+    }
+  } catch { _qbParty = []; }
+
+  // Seed from TeamBuilder if empty
+  if (_qbParty.length === 0) _qbParty = TeamBuilder.getTeam().slice(0, 6);
+
+  _qbRenderPartyBar();
+  _qbRenderPicker('');
+
+  // W/L record
+  const rec = _getQBRecord();
+  const total = rec.wins + rec.losses;
+  document.getElementById('qb-wins').textContent   = rec.wins;
+  document.getElementById('qb-losses').textContent = rec.losses;
+  document.getElementById('qb-winrate').textContent =
+    total === 0 ? '—' : `${Math.round((rec.wins / total) * 100)}%`;
+}
+
+function _qbSaveParty() {
+  localStorage.setItem('pokearena_qb_party', JSON.stringify(_qbParty));
+}
+
+function _qbRenderPartyBar() {
+  const slots = document.getElementById('qb-party-slots');
+  const fightBtn = document.getElementById('qb-fight-btn');
+  if (!slots) return;
+
+  slots.innerHTML = Array.from({ length: 6 }, (_, i) => {
+    const key = _qbParty[i];
+    if (key && POKEMON_DATA[key]) {
+      const p = POKEMON_DATA[key];
+      const shiny = TeamBuilder.isShiny ? TeamBuilder.isShiny(key) : false;
+      return `<div class="qb-slot qb-slot-filled" onclick="qbRemoveSlot(${i})" title="Remove ${p.name}">
+        <img src="${getSpriteUrl(p.id, shiny)}" alt="${p.name}" class="qb-slot-sprite" ${shiny ? 'style="filter:drop-shadow(0 0 4px #f5c518)"' : ''}/>
+        <span class="qb-slot-name">${shiny ? '✨' : ''}${p.name}</span>
+        <span class="qb-slot-remove">✕</span>
+      </div>`;
+    }
+    return `<div class="qb-slot qb-slot-empty">
+      <span class="qb-slot-num">${i + 1}</span>
+    </div>`;
+  }).join('');
+
+  if (fightBtn) fightBtn.disabled = _qbParty.length === 0;
+}
+
+function _qbRenderPicker(filter) {
+  const grid = document.getElementById('qb-picker-grid');
+  if (!grid) return;
+
+  // Combine hardcoded unlocked AND save-system unlocked
+  const savedUnlocked = new Set(SaveSystem.getUnlocked());
+
+  const unlocked = Object.keys(POKEMON_DATA).filter(key => {
+    const p = POKEMON_DATA[key];
+    if (!p) return false;
+    // Show if hardcoded unlocked OR earned through gameplay
+    if (p.unlocked !== true && !savedUnlocked.has(key)) return false;
+    if (filter && !p.name.toLowerCase().includes(filter.toLowerCase())) return false;
+    return true;
+  });
+
+  if (unlocked.length === 0) {
+    grid.innerHTML = '<div class="qb-picker-empty">No Pokémon found</div>';
+    return;
+  }
+
+  grid.innerHTML = unlocked.map(key => {
+    const p = POKEMON_DATA[key];
+    const inParty = _qbParty.includes(key);
+    const partyIdx = _qbParty.indexOf(key);
+    const shiny = TeamBuilder.isShiny ? TeamBuilder.isShiny(key) : false;
+    const spriteUrl = getSpriteUrl(p.id, shiny);
+    return `<div class="qb-picker-card ${inParty ? 'qb-in-party' : ''}" 
+                 onclick="qbTogglePokemon('${key}')"
+                 title="${inParty ? `Remove ${p.name} (slot ${partyIdx+1})` : `Add ${p.name}`}">
+      <div class="qb-picker-sprite-wrap">
+        <img src="${spriteUrl}" alt="${p.name}" class="qb-picker-sprite"/>
+        ${inParty ? `<div class="qb-party-badge">${partyIdx + 1}</div>` : ''}
+      </div>
+      <div class="qb-picker-name">${p.name}</div>
+      <div class="qb-picker-types">
+        ${p.types.map(t => `<span class="type-badge type-${t}">${t}</span>`).join('')}
+      </div>
+      <div class="qb-picker-id">#${String(p.id).padStart(3,'0')}</div>
+    </div>`;
+  }).join('');
+}
+
+function qbTogglePokemon(key) {
+  const idx = _qbParty.indexOf(key);
+  if (idx >= 0) {
+    _qbParty.splice(idx, 1);
+  } else {
+    if (_qbParty.length >= 6) {
+      TeamBuilder.showToast('Party full! Remove a Pokémon first.');
+      return;
+    }
+    _qbParty.push(key);
+  }
+  _qbSaveParty();
+  _qbRenderPartyBar();
+  // Refresh picker to update in-party state
+  const search = document.getElementById('qb-search')?.value || '';
+  _qbRenderPicker(search);
+  if (typeof SoundSystem !== 'undefined') SoundSystem.play('menuSelect');
+}
+
+function qbRemoveSlot(idx) {
+  if (idx >= 0 && idx < _qbParty.length) {
+    _qbParty.splice(idx, 1);
+    _qbSaveParty();
+    _qbRenderPartyBar();
+    const search = document.getElementById('qb-search')?.value || '';
+    _qbRenderPicker(search);
+  }
+}
+
+function qbFilterPicker() {
+  const val = document.getElementById('qb-search')?.value || '';
+  _qbRenderPicker(val);
+}
+
+function _getQBRecord() {
+  try { return JSON.parse(localStorage.getItem('pokearena_qb_record') || '{"wins":0,"losses":0}'); }
+  catch { return { wins: 0, losses: 0 }; }
+}
+function _saveQBRecord(r) {
+  localStorage.setItem('pokearena_qb_record', JSON.stringify(r));
+}
+
+function startQuickBattle() {
+  if (!_qbParty || _qbParty.length === 0) {
+    TeamBuilder.showToast('Add at least 1 Pokémon to your party!');
+    return;
+  }
+  SoundSystem.play('menuSelect');
+  const level = parseInt(document.getElementById('quick-battle-level')?.value || '50', 10);
+  const tier  = parseInt(document.getElementById('quick-battle-tier')?.value  || '2',  10);
+
+  const playerTeam = _qbParty
+    .map(key => {
+      const shiny = TeamBuilder.isShiny ? TeamBuilder.isShiny(key) : false;
+      return createPokemonInstance(key, level, { shiny });
+    })
+    .filter(Boolean);
+
+  const cpuPool   = Object.keys(POKEMON_DATA).filter(k => POKEMON_DATA[k] && POKEMON_DATA[k].unlocked !== false);
+  const shuffled  = cpuPool.sort(() => Math.random() - 0.5);
+  const enemyTeam = shuffled.slice(0, Math.min(playerTeam.length, 3))
+    .map(k => createPokemonInstance(k, level, { shiny: Math.random() < 1/512 }))
+    .filter(Boolean);
+
+  window._qbTier = tier;
+  Screen.show('screen-battle');
+  Battle.start(playerTeam, enemyTeam, { tower: false, cpuTier: tier });
+}
+
 function startBattle(mode) {
   const keys = TeamBuilder.getTeam();
   if (keys.length === 0) {
     TeamBuilder.showToast('Add at least 1 Pokémon to your team!');
     return;
   }
-
   SoundSystem.play('menuSelect');
   const level = parseInt(document.getElementById('quick-battle-level')?.value || '50', 10);
   const playerTeam = TeamBuilder.buildBattleTeam(level);
 
-  // Random enemy team scaled to player team size and chosen level
   const cpuPool  = ['charizard','blastoise','venusaur','pikachu','gengar','snorlax','lapras','machamp','dragonite'];
   const shuffled = cpuPool.sort(() => Math.random() - 0.5);
   const enemyTeam = shuffled.slice(0, Math.min(playerTeam.length, 3))
     .map(k => {
-      const isShiny = Math.random() < (1/512);  // 1/512 chance
+      const isShiny = Math.random() < (1/512);
       return createPokemonInstance(k, level, { shiny: isShiny });
     })
     .filter(Boolean);
@@ -1246,14 +1462,17 @@ function startBattle(mode) {
 
 async function startTowerBattle() {
   const lead    = Tower.getSelectedLead();
-  const slotIdx = Tower.getSelectedSlotIdx();
+  let   slotIdx = Tower.getSelectedSlotIdx();
+
+  // Auto-pick first empty slot if none selected
+  if (slotIdx < 0) {
+    const slots = SaveSystem.getTowerSlots();
+    slotIdx = slots.findIndex(s => !s || !s.active);
+    if (slotIdx < 0) slotIdx = 0;  // all full — overwrite slot 0
+  }
 
   if (!lead) {
-    TeamBuilder.showToast('Choose your lead Pokémon in the Tower menu!');
-    return;
-  }
-  if (slotIdx < 0) {
-    TeamBuilder.showToast('Choose a save slot first!');
+    TeamBuilder.showToast('Choose your lead Pokémon first!');
     return;
   }
 
@@ -1279,6 +1498,11 @@ async function _runTowerFloor() {
   Screen.show('screen-battle');
   await FloorTransition.show(floorData, false);
 
+  // Apply random floor weather before battle starts
+  if (floorData.weather && typeof Weather !== 'undefined') {
+    Weather.set(floorData.weather, 8);  // lasts 8 turns
+  }
+
   Battle.start(playerTeam, floorData.enemyTeam, { tower: true, cpuTier, floorData });
 }
 
@@ -1286,28 +1510,48 @@ async function afterBattle() {
   document.getElementById('result-overlay').classList.add('hidden');
   SoundSystem.play('menuSelect');
 
-  // Story mode win callback
-  if (Battle.isStoryBattle()) {
-    Battle.fireStoryWin();
-    return;
-  }
+  // Tower mode takes priority — isTowerMode is set when battle starts and
+  // never changed mid-battle, so this is reliable even if story state is stale
+  if (Battle.isTower) {
+    // endRun() is called by defeat(), so if tower is no longer active we lost
+    if (!Tower.getIsActive()) {
+      // Defeat — run already ended, go back to tower menu
+      Screen.show('screen-tower-menu');
+      return;
+    }
 
-  if (Tower.getIsActive()) {
-    // Sync level-ups from battle back into the run party
+    // Victory — advance to next floor
+    if (typeof TowerShop !== 'undefined' && typeof _lastTowerXP !== 'undefined') {
+      TowerShop.awardBattleCoins(_lastTowerXP);
+      _lastTowerXP = 0;
+    }
     Tower.syncPartyLevels(Battle.playerTeam || []);
     Tower.advanceFloor();
 
-    // If an egg was earned this floor, show the hatch overlay first
     const egg = Tower.getPendingEgg();
     if (egg) {
       Tower.clearPendingEgg();
       await EggHatch.show(egg);
     }
 
+    const currentFloorData = Tower.generateFloor(Tower.getCurrentFloor() - 1);
+    if (currentFloorData.hasShop && typeof TowerShop !== 'undefined') {
+      await TowerShop.show();
+    }
+
     await _runTowerFloor();
-  } else {
-    Screen.show('screen-menu');
+    return;
   }
+
+  // Story mode win callback
+  if (Battle.isStoryBattle()) {
+    Battle.fireStoryWin();
+    return;
+  }
+
+  // Regular CPU / PvP — return to whichever screen launched this battle
+  // Quick battles go back to quick battle screen; PvP goes to online screen
+  Screen.show('screen-quickbattle');
 }
 
 /** Resume an interrupted tower run from saved floor */

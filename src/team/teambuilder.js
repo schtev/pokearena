@@ -36,10 +36,12 @@ const TeamBuilder = (() => {
     playerTeam      = [...SaveSystem.getTeam()];
     unlockedPokemon = [...SaveSystem.getUnlocked()];
     unlockedPokemon.forEach(key => { if (POKEMON_DATA[key]) POKEMON_DATA[key].unlocked = true; });
-    // Load per-pokemon prefs
-    const heldMap = SaveSystem.getHeldItems() || {};
+    // Load per-pokemon prefs — restore saved shiny toggle state
+    const heldMap    = SaveSystem.getHeldItems()    || {};
+    const activeShiny = SaveSystem.getActiveShiny() || {};
     playerTeam.filter(Boolean).forEach(key => {
-      _shinySlots[key] = SaveSystem.hasShiny(key) ? false : false; // default off, can toggle
+      // Restore shiny toggle: only true if shiny is unlocked AND was toggled on
+      _shinySlots[key] = SaveSystem.hasShiny(key) && (activeShiny[key] === true);
       _heldSlots[key]  = heldMap[key] || null;
     });
   }
@@ -53,7 +55,9 @@ const TeamBuilder = (() => {
       showToast(`${POKEMON_DATA[key].name} is already in your team!`); return false;
     }
     playerTeam.push(key);
-    _shinySlots[key] = false;
+    // Restore previously saved shiny state (don't wipe it on re-add)
+    const savedActive = SaveSystem.getActiveShiny() || {};
+    _shinySlots[key] = SaveSystem.hasShiny(key) && (savedActive[key] === true);
     _heldSlots[key]  = null;
     save(); renderTeamSlots(); renderCollection();
     if (typeof SoundSystem !== 'undefined') SoundSystem.play('menuSelect');
@@ -62,6 +66,8 @@ const TeamBuilder = (() => {
 
   function removeFromTeam(slotIndex) {
     if (slotIndex < 0 || slotIndex >= playerTeam.length) return;
+    // Note: we deliberately DON'T clear _shinySlots or activeShiny here —
+    // if the player re-adds this Pokémon later, their shiny toggle is preserved.
     playerTeam.splice(slotIndex, 1);
     save(); renderTeamSlots(); renderCollection();
   }
@@ -77,6 +83,7 @@ const TeamBuilder = (() => {
   function toggleShiny(key) {
     if (!SaveSystem.hasShiny(key)) { showToast(`No shiny ${POKEMON_DATA[key]?.name} unlocked!`); return; }
     _shinySlots[key] = !_shinySlots[key];
+    SaveSystem.setActiveShiny(key, _shinySlots[key]);  // persist toggle state
     save(); renderTeamSlots();
   }
 
@@ -455,4 +462,10 @@ function removeFromTeam(idx) { TeamBuilder.removeFromTeam(idx); }
 function filterCollection() {
   const val = document.getElementById('search-pokemon')?.value || '';
   TeamBuilder.renderCollection(val);
+}
+
+function collSetType(type, btn) {
+  document.querySelectorAll('.coll-type-chip').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  TeamBuilder.setCollType(type);
 }
